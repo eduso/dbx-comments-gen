@@ -1,38 +1,146 @@
 # dbx-comments-gen
 
-Databricks project for automated comment generation.
+Generador automático de comentarios de negocio para esquemas, tablas y columnas de Unity Catalog usando modelos fundacionales de IA.
 
-## Project Structure
+## Descripción
+
+Este proyecto automatiza la documentación de activos de datos en Databricks. Utiliza documentos proporcionados por el usuario como contexto para que un modelo de IA genere comentarios descriptivos orientados a usuarios de negocio.
+
+**Capacidades principales:**
+- Recorre un catálogo completo o un esquema específico
+- Genera comentarios para esquemas, tablas y columnas
+- Usa documentos de contexto priorizados dinámicamente por relevancia
+- Opcionalmente, muestrea datos reales de cada tabla para enriquecer el contexto
+- Persiste resultados y trazabilidad completa de cada ejecución
+- Dashboard interactivo para navegar los resultados
+
+## Estructura del Proyecto
 
 ```
 dbx-comments-gen/
-├── src/
-│   ├── notebooks/       # Databricks notebooks
-│   ├── jobs/            # Job definitions and workflows
-│   ├── pipelines/       # DLT and data pipelines
-│   └── utils/           # Shared utilities and helpers
-├── tests/
-│   ├── unit/            # Unit tests
-│   └── integration/     # Integration tests
-├── config/              # Environment configs (dev, staging, prod)
-├── data/
-│   ├── raw/             # Raw input data (local dev)
-│   └── processed/       # Processed output data (local dev)
-├── infrastructure/
-│   └── terraform/       # IaC for Databricks resources
-└── .github/
-    └── workflows/       # CI/CD pipelines
+├── databricks.yml                # Databricks Asset Bundle (DAB) para despliegue
+├── input/                        # Insumos del usuario (documentos de contexto)
+│   └── mapping.md                # Mapeo de archivos y su propósito
+└── src/
+    ├── notebooks/
+    │   ├── comments_generator_v4.py                              # Notebook principal
+    │   └── 01_dashboard_generacion_de_comentarios.lvdash.json    # Dashboard Lakeview
+    └── pipelines/
+        └── 01_repositorio_resultados.sql                         # DDL de tablas de control
 ```
 
-## Setup
+## Parámetros
 
-1. Configure Databricks CLI authentication
-2. Set environment variables in `config/`
-3. Deploy infrastructure with Terraform
-4. Run notebooks or jobs from `src/`
+| Parámetro | Descripción | Default |
+|-----------|-------------|---------|
+| `catalog_name` | Catálogo de Unity Catalog a procesar | `main_eduardo_sojo` |
+| `schema_name` | Esquema específico. Vacío = todo el catálogo | _(vacío)_ |
+| `model_endpoint` | Endpoint del modelo fundacional | `databricks-claude-sonnet-4-5` |
+| `results_catalog` | Catálogo donde se guardan los resultados | `main_eduardo_sojo` |
+| `results_schema` | Esquema donde se guardan los resultados | `ai_comments_generation` |
+| `enable_sampling` | Habilitar muestreo de datos reales (`yes`/`no`) | `no` |
+| `sampling_pct` | Porcentaje de muestreo para tablas >500 registros (1-100) | `10` |
 
-## Testing
+## Insumos
+
+Los documentos de contexto se colocan en la carpeta `input/` y se registran en `input/mapping.md` con el formato:
+
+```
+`nombre_archivo.ext`: Descripción de para qué sirve este archivo
+```
+
+**Formatos soportados:** `.docx`, `.tsv`, `.csv`, `.xlsx`, `.txt`, `.md`, `.json`, `.yaml`
+
+El proceso prioriza dinámicamente los insumos más relevantes para cada esquema/tabla, respetando el límite de contexto del modelo.
+
+## Despliegue con DAB
+
+### Prerrequisitos
+
+- Databricks CLI v0.200+ con autenticación configurada
+- Acceso al workspace destino
+
+### Comandos
 
 ```bash
-pytest tests/
+# Validar el bundle
+databricks bundle validate --target dev --profile latam-demo
+
+# Desplegar al workspace
+databricks bundle deploy --target dev --profile latam-demo
+
+# Ejecutar el job con parámetros por defecto
+databricks bundle run comments_generator --target dev --profile latam-demo
+
+# Ejecutar con parámetros personalizados
+databricks bundle run comments_generator --target dev --profile latam-demo \
+  --params catalog_name=mi_catalogo,schema_name=mi_esquema,enable_sampling=yes,sampling_pct=15
 ```
+
+### Targets disponibles
+
+| Target | Modo | Descripción |
+|--------|------|-------------|
+| `dev` | development | Desarrollo y pruebas (default) |
+| `prod` | production | Producción con catálogos definitivos |
+
+## Dashboard
+
+El dashboard interactivo (`01_dashboard_generacion_de_comentarios.lvdash.json`) permite navegar los resultados con filtros cascading:
+
+1. **Fecha de ejecución** — Filtra todo el dashboard
+2. **Esquema** (opcional) — Se filtra según la fecha seleccionada
+3. **Tabla** (opcional, multi-select) — Se filtra según fecha y esquema
+
+**Widgets incluidos:**
+- 4 KPI counters (ejecuciones, comentarios, esquemas, tablas)
+- Historial de ejecuciones con estado y conteo
+- Detalle de comentarios generados por columna
+
+## Tablas de Resultados
+
+Las tablas se crean automáticamente en el esquema configurado:
+
+### `ejecuciones`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id_ejecucion` | STRING (PK) | GUID único de la ejecución |
+| `fecha_ejecucion` | TIMESTAMP | Fecha/hora UTC |
+| `estado` | VARCHAR(50) | INICIADO, EN_PROCESO, COMPLETADO, COMPLETADO_CON_ERRORES, ERROR |
+| `resultado` | VARCHAR(4000) | Detalle del resultado |
+
+### `resultados`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id_resultado` | BIGINT (PK, identity) | ID autoincrementable |
+| `id_ejecucion` | STRING (FK) | Referencia a la ejecución |
+| `fecha_resultado` | TIMESTAMP | Fecha/hora UTC de generación |
+| `nombre_esquema` | VARCHAR(255) | Esquema procesado |
+| `nombre_tabla` | VARCHAR(255) | Tabla procesada (`__esquema__` para esquemas) |
+| `nombre_columna` | VARCHAR(255) | Columna procesada (`__tabla__` para tablas) |
+| `comentario` | VARCHAR(4000) | Comentario generado por IA |
+
+---
+
+## Release Notes
+
+### v4.0 (2026-04-06)
+
+**Nuevas funcionalidades:**
+- **Recorrido por catálogo completo:** Si no se especifica esquema, el proceso descubre y recorre todos los esquemas del catálogo automáticamente
+- **Comentarios de esquema:** Genera comentarios de negocio a nivel de esquema, no solo de tablas y columnas
+- **Modelo parametrizable:** El endpoint del modelo fundacional se puede configurar (default: `databricks-claude-sonnet-4-5`)
+- **Esquema de resultados parametrizable:** El usuario decide en qué catálogo/esquema se persisten los resultados al desplegar
+- **Auto-provisioning de tablas:** El esquema y tablas de control se crean automáticamente si no existen
+- **Contexto dinámico desde mapping.md:** Lee `input/mapping.md` para entender el propósito de cada insumo y prioriza los archivos más relevantes por esquema/tabla
+- **Sampling de datos:** Muestra aleatoria de cada tabla (configurable: `enable_sampling`, `sampling_pct`) para enriquecer el contexto del modelo con datos reales
+- **Porcentaje de sampling parametrizable:** El usuario controla qué porcentaje de datos muestrear (1-100%, default: 10%)
+- **Databricks Asset Bundle (DAB):** Bundle completo para despliegue con `databricks bundle deploy`, con variables parametrizables por target
+- **Dashboard mejorado:** Filtros cascading (fecha → esquema → tabla), 4 KPIs, historial de ejecuciones, detalle de comentarios
+- **Logging detallado:** Registro estructurado de cada etapa del proceso con timestamps
+
+**Cambios respecto a v3:**
+- El esquema ya no es requerido — puede estar vacío para procesar todo el catálogo
+- Los insumos ya no se leen desde una ruta fija — se leen desde `input/mapping.md`
+- Soporte para múltiples formatos de insumo (.docx, .tsv, .csv, .xlsx, .txt, .md, .json, .yaml)
+- El porcentaje de sampling ahora es un parámetro configurable (antes fijo al 10%)
