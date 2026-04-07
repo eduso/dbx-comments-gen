@@ -24,20 +24,21 @@ dbx-comments-gen/
 └── src/
     ├── notebooks/
     │   ├── comments_generator_v4.py                              # Notebook principal
+    │   ├── setup_schema.py                                       # Setup de esquema y tablas de control
     │   └── 01_dashboard_generacion_de_comentarios.lvdash.json    # Dashboard Lakeview
     └── pipelines/
-        └── 01_repositorio_resultados.sql                         # DDL de tablas de control
+        └── 01_repositorio_resultados.sql                         # DDL de tablas de control (referencia)
 ```
 
 ## Parámetros
 
 | Parámetro | Descripción | Default |
 |-----------|-------------|---------|
-| `catalog_name` | Catálogo de Unity Catalog a procesar | `main_eduardo_sojo` |
+| `catalog_name` | Catálogo de Unity Catalog a procesar | `mi_catalogo` |
 | `schema_name` | Esquema específico. Vacío = todo el catálogo | _(vacío)_ |
 | `model_endpoint` | Endpoint del modelo fundacional | `databricks-claude-sonnet-4-5` |
-| `results_catalog` | Catálogo donde se guardan los resultados | `main_eduardo_sojo` |
-| `results_schema` | Esquema donde se guardan los resultados | `ai_comments_generation` |
+| `results_catalog` | Catálogo donde se guardan los resultados | `mi_catalogo_de_resultados` |
+| `results_schema` | Esquema donde se guardan los resultados | `mi_esquema_de_resultados` |
 | `enable_sampling` | Habilitar muestreo de datos reales (`yes`/`no`) | `no` |
 | `sampling_pct` | Porcentaje de muestreo para tablas >500 registros (1-100) | `10` |
 
@@ -64,16 +65,16 @@ El proceso prioriza dinámicamente los insumos más relevantes para cada esquema
 
 ```bash
 # Validar el bundle
-databricks bundle validate --target dev --profile latam-demo
+databricks bundle validate --target dev --profile <profile>
 
 # Desplegar al workspace
-databricks bundle deploy --target dev --profile latam-demo
+databricks bundle deploy --target dev --profile <profile>
 
 # Ejecutar el job con parámetros por defecto
-databricks bundle run comments_generator --target dev --profile latam-demo
+databricks bundle run comments_generator --target dev --profile <profile>
 
 # Ejecutar con parámetros personalizados
-databricks bundle run comments_generator --target dev --profile latam-demo \
+databricks bundle run comments_generator --target dev --profile <profile> \
   --params catalog_name=mi_catalogo,schema_name=mi_esquema,enable_sampling=yes,sampling_pct=15
 ```
 
@@ -86,7 +87,7 @@ databricks bundle run comments_generator --target dev --profile latam-demo \
 
 ## Dashboard
 
-El dashboard interactivo (`01_dashboard_generacion_de_comentarios.lvdash.json`) permite navegar los resultados con filtros cascading:
+El dashboard interactivo (`01_dashboard_generacion_de_comentarios.lvdash.json`) se despliega automáticamente como recurso del DAB y permite navegar los resultados con filtros cascading:
 
 1. **Fecha de ejecución** — Filtra todo el dashboard
 2. **Esquema** (opcional) — Se filtra según la fecha seleccionada
@@ -123,6 +124,16 @@ Las tablas se crean automáticamente en el esquema configurado:
 ---
 
 ## Release Notes
+
+### v4.1 (2026-04-07)
+
+**Mejoras:**
+- **Dashboard desplegado como recurso DAB:** El dashboard Lakeview ahora se despliega automáticamente con `databricks bundle deploy`
+- **Tarea `setup_schema`:** El job ahora incluye una tarea inicial que crea el esquema y tablas de control antes de generar comentarios (`setup_schema` → `generate_comments`)
+- **Backtick quoting en SQL:** Todos los identificadores de catálogo, esquema y tabla se escapan con backticks para soportar nombres con caracteres especiales (e.g., guiones)
+- **Soporte para `.xlsx`:** Agregado `openpyxl` como dependencia para lectura de archivos Excel
+- **Prompt mejorado:** Instrucción explícita al modelo para usar solo el contexto proporcionado y no conocimiento previo
+- **Variables genéricas:** Los defaults de las variables usan placeholders descriptivos en lugar de valores específicos de un workspace
 
 ### v4.0 (2026-04-06)
 

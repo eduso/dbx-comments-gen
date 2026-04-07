@@ -13,8 +13,8 @@
         "  e.id_ejecucion AS `ID ejecucion`,\n",
         "  e.estado AS `Estado ejecucion`,\n",
         "  e.fecha_ejecucion AS `Fecha ejecucion`\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.resultados r\n",
-        "JOIN main_eduardo_sojo.ai_comments_generation.ejecuciones e\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.resultados r\n",
+        "JOIN main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",
@@ -52,8 +52,8 @@
         "  e.estado AS Estado,\n",
         "  e.resultado AS Resultado,\n",
         "  COUNT(r.id_resultado) AS `Comentarios generados`\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.ejecuciones e\n",
-        "LEFT JOIN main_eduardo_sojo.ai_comments_generation.resultados r\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones e\n",
+        "LEFT JOIN main_eduardo_sojo.`dbx-commnets-gen-db`.resultados r\n",
         "  ON e.id_ejecucion = r.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
         "GROUP BY e.id_ejecucion, e.fecha_ejecucion, e.estado, e.resultado\n",
@@ -77,8 +77,8 @@
         "  COUNT(r.id_resultado) AS `Total comentarios`,\n",
         "  COUNT(DISTINCT r.nombre_esquema) AS `Esquemas procesados`,\n",
         "  COUNT(DISTINCT r.nombre_tabla) AS `Tablas procesadas`\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.ejecuciones e\n",
-        "LEFT JOIN main_eduardo_sojo.ai_comments_generation.resultados r\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones e\n",
+        "LEFT JOIN main_eduardo_sojo.`dbx-commnets-gen-db`.resultados r\n",
         "  ON e.id_ejecucion = r.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",
@@ -111,7 +111,7 @@
       "queryLines": [
         "SELECT DISTINCT\n",
         "  CAST(fecha_ejecucion AS DATE) AS fecha_ejecucion\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.ejecuciones\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones\n",
         "ORDER BY fecha_ejecucion DESC"
       ]
     },
@@ -120,8 +120,8 @@
       "displayName": "Filtro esquema",
       "queryLines": [
         "SELECT DISTINCT r.nombre_esquema\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.resultados r\n",
-        "JOIN main_eduardo_sojo.ai_comments_generation.ejecuciones e\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.resultados r\n",
+        "JOIN main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
         "ORDER BY r.nombre_esquema"
@@ -140,8 +140,8 @@
       "displayName": "Filtro tabla",
       "queryLines": [
         "SELECT DISTINCT r.nombre_tabla\n",
-        "FROM main_eduardo_sojo.ai_comments_generation.resultados r\n",
-        "JOIN main_eduardo_sojo.ai_comments_generation.ejecuciones e\n",
+        "FROM main_eduardo_sojo.`dbx-commnets-gen-db`.resultados r\n",
+        "JOIN main_eduardo_sojo.`dbx-commnets-gen-db`.ejecuciones e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",

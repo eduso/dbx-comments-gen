@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # Generador de Comentarios v4
 # MAGIC ## Documentación Automática de Esquemas, Tablas y Columnas con IA
@@ -48,7 +47,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install python-docx mlflow -q
+# MAGIC %pip install python-docx mlflow openpyxl -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -174,14 +173,14 @@ logger.info(f"  Verificando existencia de {RESULTS_CATALOG}.{RESULTS_SCHEMA}..."
 
 # -- Crear esquema si no existe --
 spark.sql(f"""
-    CREATE SCHEMA IF NOT EXISTS {RESULTS_CATALOG}.{RESULTS_SCHEMA}
+    CREATE SCHEMA IF NOT EXISTS `{RESULTS_CATALOG}`.`{RESULTS_SCHEMA}`
     COMMENT 'Esquema para la generación automática de comentarios usando IA'
 """)
 logger.info(f"  ✓ Esquema {RESULTS_CATALOG}.{RESULTS_SCHEMA} verificado")
 
 # -- Crear tabla de ejecuciones si no existe --
 spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {EXEC_TABLE} (
+    CREATE TABLE IF NOT EXISTS `{RESULTS_CATALOG}`.`{RESULTS_SCHEMA}`.`ejecuciones` (
         id_ejecucion    STRING        NOT NULL COMMENT 'GUID único de la ejecución',
         fecha_ejecucion TIMESTAMP     COMMENT 'Fecha y hora de la ejecución (UTC)',
         estado          VARCHAR(50)   COMMENT 'Estado: INICIADO, EN_PROCESO, COMPLETADO, COMPLETADO_CON_ERRORES, ERROR',
@@ -195,7 +194,7 @@ logger.info(f"  ✓ Tabla {EXEC_TABLE} verificada")
 
 # -- Crear tabla de resultados si no existe --
 spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {RESULTS_TABLE} (
+    CREATE TABLE IF NOT EXISTS `{RESULTS_CATALOG}`.`{RESULTS_SCHEMA}`.`resultados` (
         id_resultado    BIGINT        GENERATED ALWAYS AS IDENTITY COMMENT 'ID autoincrementable del resultado',
         id_ejecucion    STRING        NOT NULL COMMENT 'Referencia a la ejecución que generó este resultado',
         fecha_resultado TIMESTAMP     COMMENT 'Fecha en que se generó el comentario (UTC)',
@@ -205,7 +204,7 @@ spark.sql(f"""
         comentario      VARCHAR(4000) COMMENT 'Comentario generado por IA',
         CONSTRAINT pk_resultados PRIMARY KEY (id_resultado),
         CONSTRAINT fk_ejecucion  FOREIGN KEY (id_ejecucion)
-            REFERENCES {EXEC_TABLE} (id_ejecucion)
+            REFERENCES `{RESULTS_CATALOG}`.`{RESULTS_SCHEMA}`.`ejecuciones` (id_ejecucion)
     )
     COMMENT 'Comentarios generados por IA por columna de cada tabla procesada'
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
@@ -225,6 +224,11 @@ logger.info("  Esquema de resultados listo")
 # MAGIC - `insert_resultado()`: Inserción de un comentario generado
 
 # COMMAND ----------
+
+# ── Backtick-quoted table names for SQL (schema may contain special chars) ──
+_EXEC_TABLE_SQL = ".".join(f"`{p}`" for p in EXEC_TABLE.split("."))
+_RESULTS_TABLE_SQL = ".".join(f"`{p}`" for p in RESULTS_TABLE.split("."))
+
 
 def _now() -> str:
     """
@@ -250,7 +254,7 @@ def insert_ejecucion(exec_id: str, estado: str) -> None:
     Se invoca una sola vez al inicio del proceso con estado 'INICIADO'.
     """
     spark.sql(f"""
-        INSERT INTO {EXEC_TABLE}
+        INSERT INTO {_EXEC_TABLE_SQL}
             (id_ejecucion, fecha_ejecucion, estado, resultado)
         VALUES
             ('{exec_id}', TIMESTAMP '{_now()}', '{_esc(estado)}', NULL)
@@ -265,7 +269,7 @@ def update_ejecucion(exec_id: str, estado: str, resultado: str = None) -> None:
     """
     resultado_sql = f"'{_esc(resultado)}'" if resultado is not None else "NULL"
     spark.sql(f"""
-        UPDATE {EXEC_TABLE}
+        UPDATE {_EXEC_TABLE_SQL}
         SET estado = '{_esc(estado)}',
             fecha_ejecucion = TIMESTAMP '{_now()}',
             resultado = {resultado_sql}
@@ -288,7 +292,7 @@ def insert_resultado(
     - Comentarios de columna: nombre_columna=<nombre técnico de la columna>
     """
     spark.sql(f"""
-        INSERT INTO {RESULTS_TABLE}
+        INSERT INTO {_RESULTS_TABLE_SQL}
             (id_ejecucion, fecha_resultado, nombre_esquema, nombre_tabla, nombre_columna, comentario)
         VALUES (
             '{exec_id}', TIMESTAMP '{_now()}',
@@ -709,6 +713,7 @@ def generate_schema_comment(
         + f"\n\n- Esquema: {schema_name}"
         + f"\n- Tablas contenidas: {tables_list}\n\n"
         + "La definición debe:\n"
+        + "- Utilizar solo la información dada en el contexto y no de ejecuciones o conocimiento previo.\n"
         + "- Explicar el propósito del esquema y qué dominio de negocio cubre.\n"
         + "- Mencionar los principales tipos de datos que contiene.\n"
         + "- Estar escrita en español, lenguaje claro para usuarios de negocio.\n"
@@ -755,6 +760,7 @@ def generate_table_comment(
         + f"\nGenera una definición de negocio clara y completa para la siguiente tabla:"
         + f"\n\n- Tabla: {table_name}\n\n"
         + "La definición debe:\n"
+        + "- Utilizar solo la información dada en el contexto y no de ejecuciones o conocimiento previo.\n"
         + "- Explicar a qué nivel se encuentra la información (ej: cliente, transacción, producto).\n"
         + "- Indicar los principales usos de la información en el negocio.\n"
         + "- Mencionar reglas o lógicas de negocio relevantes si el nombre lo sugiere.\n"

@@ -20,19 +20,19 @@ bundle:
 variables:
   catalog_name:
     description: "Catálogo de Unity Catalog a procesar"
-    default: "main_eduardo_sojo"
+    default: "mi_catalogo"
   schema_name:
-    description: "Esquema específico (vacío = todo el catálogo)"
+    description: "Esquema específico (vacío = todo el catálogo) a procesar"
     default: ""
   model_endpoint:
     description: "Endpoint del modelo fundacional en Foundation Model API"
     default: "databricks-claude-sonnet-4-5"
   results_catalog:
     description: "Catálogo donde se persisten los resultados"
-    default: "main_eduardo_sojo"
+    default: "mi_catalogo_de_resultados"
   results_schema:
     description: "Esquema donde se persisten los resultados"
-    default: "ai_comments_generation"
+    default: "mi_esquema_de_resultados"
   enable_sampling:
     description: "Habilitar muestreo de datos reales (yes/no)"
     default: "no"
@@ -58,6 +58,13 @@ sync:
 # Recursos — Jobs definidos en el bundle
 # ─────────────────────────────────────────────────────────────────────────────
 resources:
+  dashboards:
+    comments_dashboard:
+      display_name: "[${bundle.target}] Generación de Comentarios con IA"
+      file_path: src/notebooks/01_dashboard_generacion_de_comentarios.lvdash.json
+      warehouse_id: f282fc596500d029
+      embed_credentials: false
+
   jobs:
     comments_generator:
       name: "[${bundle.target}] Generador de Comentarios con IA"
@@ -84,7 +91,28 @@ resources:
           default: ${var.sampling_pct}
 
       tasks:
+        - task_key: setup_schema
+          description: "Crea el esquema y tablas de control para resultados"
+          notebook_task:
+            notebook_path: src/notebooks/setup_schema.py
+            base_parameters:
+              results_catalog: "{{job.parameters.results_catalog}}"
+              results_schema:  "{{job.parameters.results_schema}}"
+            source: WORKSPACE
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            num_workers: 0
+            node_type_id: "Standard_DS3_v2"
+            spark_conf:
+              spark.master: "local[*, 4]"
+              spark.databricks.cluster.profile: "singleNode"
+            custom_tags:
+              ResourceClass: "SingleNode"
+              project: "dbx-comments-gen"
+
         - task_key: generate_comments
+          depends_on:
+            - task_key: setup_schema
           description: "Ejecuta el notebook de generación de comentarios con los parámetros configurados"
           notebook_task:
             notebook_path: src/notebooks/comments_generator_v4.py
@@ -120,12 +148,12 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://adb-361426925668745.5.azuredatabricks.net
+      host: https://adb-XXXXXXXXXXXXXXX.X.azuredatabricks.net
 
   prod:
     mode: production
     workspace:
-      host: https://adb-361426925668745.5.azuredatabricks.net
+      host: https://adb-XXXXXXXXXXXXXXX.X.azuredatabricks.net
     variables:
       catalog_name: "main"
       results_catalog: "main"

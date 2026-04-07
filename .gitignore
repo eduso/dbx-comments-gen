@@ -11,27 +11,26 @@ venv/
 .databricks/
 *.whl
 
-# Environment
+# Environment / Secrets
 .env
 .env.*
+*.tfvars
 
 # IDE
 .idea/
 .vscode/
 *.swp
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Data (keep structure, ignore contents)
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# Input data files (keep structure, user provides their own)
+input/*
+!input/.gitkeep
+!input/mapping.md
 
-# Terraform
-infrastructure/terraform/.terraform/
+# Terraform state
 *.tfstate
 *.tfstate.backup
-*.tfvars
