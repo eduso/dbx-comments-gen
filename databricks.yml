@@ -26,7 +26,7 @@ variables:
     default: ""
   model_endpoint:
     description: "Endpoint del modelo fundacional en Foundation Model API"
-    default: "databricks-claude-sonnet-4-5"
+    default: "endpoint_modelo"
   results_catalog:
     description: "Catálogo donde se persisten los resultados"
     default: "mi_catalogo_de_resultados"
