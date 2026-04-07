@@ -65,11 +65,11 @@
 # COMMAND ----------
 
 # -- Definición de widgets --
-dbutils.widgets.text("catalog_name",    "main_eduardo_sojo",            "Catálogo a procesar")
+dbutils.widgets.text("catalog_name",    "catalogo",            "Catálogo a procesar")
 dbutils.widgets.text("schema_name",     "",                             "Esquema (vacío = todo el catálogo)")
-dbutils.widgets.text("model_endpoint",  "databricks-claude-sonnet-4-5", "Modelo fundacional")
-dbutils.widgets.text("results_catalog", "main_eduardo_sojo",            "Catálogo de resultados")
-dbutils.widgets.text("results_schema",  "ai_comments_generation",       "Esquema de resultados")
+dbutils.widgets.text("model_endpoint",  "endpoint_model", "Modelo fundacional")
+dbutils.widgets.text("results_catalog", "catalogo",            "Catálogo de resultados")
+dbutils.widgets.text("results_schema",  "dbx_comments_generation",       "Esquema de resultados")
 dbutils.widgets.dropdown("enable_sampling", "no", ["no", "yes"],        "Sampling de datos")
 dbutils.widgets.text("sampling_pct",    "10",                           "Porcentaje de sampling (1-100)")
 
