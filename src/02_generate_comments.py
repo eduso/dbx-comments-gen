@@ -1,0 +1,1114 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Generador de Comentarios v5
+# MAGIC ## Documentación automática de esquemas, tablas y columnas con IA
+# MAGIC
+# MAGIC Genera comentarios de negocio en español para cada **esquema**, **tabla**
+# MAGIC y **columna** de un catálogo de Unity Catalog, usando un modelo
+# MAGIC fundacional vía Foundation Model API.
+# MAGIC
+# MAGIC ### Insumos de contexto
+# MAGIC
+# MAGIC El notebook lee `input/mapping.md`, que tiene dos secciones:
+# MAGIC
+# MAGIC - **`# Archivos`**: documentos del directorio `input/`
+# MAGIC   (`.docx`, `.tsv`, `.csv`, `.xlsx`, `.txt`, `.md`, `.json`, `.yaml`).
+# MAGIC - **`# Tablas`**: tablas de Unity Catalog
+# MAGIC   (`catalogo.esquema.tabla: descripción`).
+# MAGIC
+# MAGIC Si una tabla no es accesible o no existe, se emite un warning y el
+# MAGIC proceso continúa sin ella.
+# MAGIC
+# MAGIC ### Parámetros
+# MAGIC
+# MAGIC Todos los parámetros son obligatorios excepto `model_endpoint`, que
+# MAGIC tiene un default.
+
+# COMMAND ----------
+
+# MAGIC %pip install python-docx mlflow openpyxl -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 1. Lectura y validación de parámetros
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog_name", "", "Catálogo a procesar")
+dbutils.widgets.text("schema_name", "", "Esquema (vacío = todo el catálogo)")
+dbutils.widgets.text(
+    "model_endpoint",
+    "databricks-claude-sonnet-4-5",
+    "Modelo fundacional",
+)
+dbutils.widgets.text("results_catalog", "", "Catálogo de resultados")
+dbutils.widgets.text("results_schema", "", "Esquema de resultados")
+dbutils.widgets.dropdown(
+    "enable_sampling", "no", ["no", "yes"], "Sampling de datos"
+)
+dbutils.widgets.text("sampling_pct", "", "Porcentaje de sampling (1-100)")
+
+CATALOG_NAME = dbutils.widgets.get("catalog_name").strip()
+SCHEMA_NAME = dbutils.widgets.get("schema_name").strip()
+MODEL_ENDPOINT = dbutils.widgets.get("model_endpoint").strip()
+RESULTS_CATALOG = dbutils.widgets.get("results_catalog").strip()
+RESULTS_SCHEMA = dbutils.widgets.get("results_schema").strip()
+ENABLE_SAMPLING = (
+    dbutils.widgets.get("enable_sampling").strip().lower() == "yes"
+)
+
+_required = {
+    "catalog_name": CATALOG_NAME,
+    "model_endpoint": MODEL_ENDPOINT,
+    "results_catalog": RESULTS_CATALOG,
+    "results_schema": RESULTS_SCHEMA,
+}
+_missing = [k for k, v in _required.items() if not v]
+if _missing:
+    raise ValueError(
+        f"Parámetros obligatorios sin valor: {', '.join(_missing)}"
+    )
+
+if ENABLE_SAMPLING:
+    try:
+        SAMPLING_PCT = int(dbutils.widgets.get("sampling_pct").strip())
+        if not 1 <= SAMPLING_PCT <= 100:
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            "Si enable_sampling=yes, 'sampling_pct' debe ser entero 1-100."
+        )
+else:
+    SAMPLING_PCT = 10
+
+print("=" * 60)
+print("PARÁMETROS DE EJECUCIÓN")
+print("=" * 60)
+print(f"  Catálogo a procesar : {CATALOG_NAME}")
+print(f"  Esquema             : {SCHEMA_NAME or '(todos los esquemas)'}")
+print(f"  Modelo              : {MODEL_ENDPOINT}")
+print(f"  Resultados en       : {RESULTS_CATALOG}.{RESULTS_SCHEMA}")
+print(f"  Sampling habilitado : {ENABLE_SAMPLING}")
+print(f"  Porcentaje sampling : {SAMPLING_PCT}%")
+print("=" * 60)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 2. Configuración del entorno
+
+# COMMAND ----------
+
+import logging
+import os
+import re
+import uuid
+from datetime import datetime, timezone
+
+import pandas as pd
+from mlflow.deployments import get_deploy_client
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("comments_generator_v5")
+
+EXEC_TABLE = f"{RESULTS_CATALOG}.{RESULTS_SCHEMA}.ejecuciones"
+RESULTS_TABLE = f"{RESULTS_CATALOG}.{RESULTS_SCHEMA}.resultados"
+
+_notebook_path = (
+    dbutils.notebook.entry_point.getDbutils()
+    .notebook()
+    .getContext()
+    .notebookPath()
+    .get()
+)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_notebook_path))
+INPUT_DIR = f"/Workspace{PROJECT_ROOT}/input"
+
+deploy_client = get_deploy_client("databricks")
+
+logger.info(f"Endpoint         : {MODEL_ENDPOINT}")
+logger.info(f"Tabla ejecuciones: {EXEC_TABLE}")
+logger.info(f"Tabla resultados : {RESULTS_TABLE}")
+logger.info(f"Directorio input : {INPUT_DIR}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3. Funciones de persistencia
+
+# COMMAND ----------
+
+_EXEC_TABLE_SQL = ".".join(f"`{p}`" for p in EXEC_TABLE.split("."))
+_RESULTS_TABLE_SQL = ".".join(f"`{p}`" for p in RESULTS_TABLE.split("."))
+
+
+def _now() -> str:
+    """Retorna la fecha/hora UTC actual en formato ISO 8601."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _esc(value: str) -> str:
+    """Escapa comillas simples para sentencias SQL."""
+    return (value or "").replace("'", "''")
+
+
+def insert_ejecucion(exec_id: str, estado: str) -> None:
+    """Registra una nueva ejecución en estado inicial."""
+    spark.sql(
+        f"""
+        INSERT INTO {_EXEC_TABLE_SQL}
+            (id_ejecucion, fecha_ejecucion, estado, resultado)
+        VALUES
+            ('{exec_id}', TIMESTAMP '{_now()}',
+             '{_esc(estado)}', NULL)
+        """
+    )
+    logger.info(f"  Ejecución registrada: {exec_id} [{estado}]")
+
+
+def update_ejecucion(
+    exec_id: str, estado: str, resultado: str | None = None
+) -> None:
+    """Actualiza el estado y resultado de una ejecución."""
+    resultado_sql = (
+        f"'{_esc(resultado)}'" if resultado is not None else "NULL"
+    )
+    spark.sql(
+        f"""
+        UPDATE {_EXEC_TABLE_SQL}
+        SET estado = '{_esc(estado)}',
+            fecha_ejecucion = TIMESTAMP '{_now()}',
+            resultado = {resultado_sql}
+        WHERE id_ejecucion = '{exec_id}'
+        """
+    )
+
+
+def insert_resultado(
+    exec_id: str,
+    nombre_esquema: str,
+    nombre_tabla: str,
+    nombre_columna: str,
+    comentario: str,
+) -> None:
+    """Inserta un comentario generado (status='aprobado' por default)."""
+    spark.sql(
+        f"""
+        INSERT INTO {_RESULTS_TABLE_SQL}
+            (id_ejecucion, fecha_resultado, nombre_esquema,
+             nombre_tabla, nombre_columna, comentario,
+             status, user_comments)
+        VALUES (
+            '{exec_id}', TIMESTAMP '{_now()}',
+            '{_esc(nombre_esquema)}', '{_esc(nombre_tabla)}',
+            '{_esc(nombre_columna)}', '{_esc(comentario)}',
+            'aprobado', NULL
+        )
+        """
+    )
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 4. Carga de insumos
+# MAGIC
+# MAGIC Lee `input/mapping.md` con dos secciones:
+# MAGIC
+# MAGIC - `# Archivos`: archivos del directorio `input/`.
+# MAGIC - `# Tablas`: tablas de Unity Catalog.
+# MAGIC
+# MAGIC ### Hints opcionales en la descripción
+# MAGIC
+# MAGIC Dentro de la descripción se pueden incluir hints entre corchetes
+# MAGIC para acotar qué cargar:
+# MAGIC
+# MAGIC - **Excel**: `[tabs: tab1, tab2]` para leer solo esas hojas.
+# MAGIC - **Tablas**: `[columnas: col1, col2]` para leer solo esas columnas.
+# MAGIC
+# MAGIC Alias aceptados (case-insensitive):
+# MAGIC `tabs`/`hojas`/`sheets`, `columnas`/`columns`/`campos`/`fields`.
+
+# COMMAND ----------
+
+logger.info("ETAPA: Carga de insumos desde mapping.md")
+
+
+_HINT_TABS_RE = re.compile(
+    r"\[\s*(?:tabs?|hojas?|sheets?)\s*:\s*([^\]]+)\]", re.IGNORECASE
+)
+_HINT_COLS_RE = re.compile(
+    r"\[\s*(?:columnas?|columns?|campos?|fields?)\s*:\s*([^\]]+)\]",
+    re.IGNORECASE,
+)
+
+
+def _split_hint_list(raw: str) -> list:
+    """Split de '[a, "b", c]' a ['a', 'b', 'c']."""
+    return [
+        item.strip().strip("\"'`")
+        for item in raw.split(",")
+        if item.strip()
+    ]
+
+
+def parse_hints(description: str) -> dict:
+    """Extrae hints estructurados de la descripción de un insumo.
+
+    Soporta '[tabs: a, b]' y '[columnas: x, y]' (case-insensitive).
+
+    Returns:
+        dict con keys 'tabs' (list) y 'columns' (list).
+    """
+    hints: dict = {"tabs": [], "columns": []}
+    tabs_match = _HINT_TABS_RE.search(description)
+    if tabs_match:
+        hints["tabs"] = _split_hint_list(tabs_match.group(1))
+    cols_match = _HINT_COLS_RE.search(description)
+    if cols_match:
+        hints["columns"] = _split_hint_list(cols_match.group(1))
+    return hints
+
+
+def _qualify(table_fqn: str) -> str:
+    """Convierte 'a.b.c' → '`a`.`b`.`c`' para SQL seguro."""
+    return ".".join(f"`{p}`" for p in table_fqn.split("."))
+
+
+def parse_mapping_file(input_dir: str) -> dict:
+    """Lee mapping.md y separa entradas por sección.
+
+    Returns:
+        dict con keys 'archivos' (list) y 'tablas' (list). Cada item:
+        {'name': str, 'description': str}.
+    """
+    result = {"archivos": [], "tablas": []}
+    mapping_path = f"{input_dir}/mapping.md"
+
+    try:
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        logger.info(f"  Cargado mapping.md ({len(content)} chars)")
+    except FileNotFoundError:
+        logger.warning(
+            f"  No se encontró {mapping_path} — sin insumos de contexto"
+        )
+        return result
+    except Exception as exc:
+        logger.error(f"  Error leyendo mapping.md: {exc}")
+        return result
+
+    current_section = None
+    for raw_line in content.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            header = line.lstrip("#").strip().lower()
+            if "archivo" in header:
+                current_section = "archivos"
+            elif "tabla" in header:
+                current_section = "tablas"
+            else:
+                current_section = None
+            continue
+
+        if current_section is None or ":" not in line:
+            continue
+
+        name_part, _, description = line.partition(":")
+        name = name_part.strip().strip("`").strip()
+        description = description.strip()
+        if not name or not description:
+            continue
+
+        if current_section == "archivos" and "." in name:
+            result["archivos"].append(
+                {"name": name, "description": description}
+            )
+        elif current_section == "tablas" and name.count(".") == 2:
+            result["tablas"].append(
+                {"name": name, "description": description}
+            )
+
+    logger.info(
+        f"  Archivos: {len(result['archivos'])}, "
+        f"Tablas: {len(result['tablas'])}"
+    )
+    return result
+
+
+def load_file_content(filepath: str, hints: dict | None = None) -> str:
+    """Carga el contenido de un archivo según su extensión.
+
+    Args:
+        filepath: ruta absoluta al archivo.
+        hints: dict opcional con 'tabs' (list) para Excel multi-hoja.
+    """
+    hints = hints or {}
+    ext = os.path.splitext(filepath)[1].lower()
+
+    if ext == ".docx":
+        from docx import Document
+        doc = Document(filepath)
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+    if ext in (".tsv", ".csv"):
+        sep = "\t" if ext == ".tsv" else ","
+        df = pd.read_csv(filepath, sep=sep, encoding="utf-8")
+        return df.to_string(index=False, max_rows=200)
+
+    if ext in (".txt", ".md", ".json", ".yaml", ".yml"):
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+
+    if ext in (".xls", ".xlsx"):
+        tabs = hints.get("tabs", [])
+        if not tabs:
+            df = pd.read_excel(filepath)
+            return df.to_string(index=False, max_rows=200)
+
+        parts: list = []
+        for tab in tabs:
+            try:
+                df = pd.read_excel(filepath, sheet_name=tab)
+                parts.append(f"--- Hoja: {tab} ---")
+                parts.append(df.to_string(index=False, max_rows=200))
+            except Exception as exc:
+                logger.warning(
+                    f"    ⚠ Hoja '{tab}' no disponible en "
+                    f"{os.path.basename(filepath)}: {str(exc)[:120]}"
+                )
+        return "\n".join(parts)
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        logger.warning(f"  Formato no soportado: {filepath}")
+        return ""
+
+
+def load_table_content(table_fqn: str, hints: dict | None = None) -> str:
+    """Carga el contenido de una tabla UC como texto tabular.
+
+    Args:
+        table_fqn: nombre fully-qualified 'catalogo.esquema.tabla'.
+        hints: dict opcional con 'columns' (list) para seleccionar
+            solo esas columnas.
+    """
+    hints = hints or {}
+    columns = hints.get("columns", [])
+    qualified = _qualify(table_fqn)
+
+    if columns:
+        col_list = ", ".join(f"`{c}`" for c in columns)
+        query = f"SELECT {col_list} FROM {qualified} LIMIT 200"
+    else:
+        query = f"SELECT * FROM {qualified} LIMIT 200"
+
+    sample_df = spark.sql(query).toPandas()
+    if sample_df.empty:
+        return "(tabla vacía — sin registros)"
+    return sample_df.to_string(index=False, max_colwidth=200)
+
+
+def load_all_insumos(input_dir: str) -> dict:
+    """Carga todos los insumos referenciados en mapping.md.
+
+    Returns:
+        Dict indexado por nombre. Cada valor:
+        {'description': str, 'content': str, 'size': int, 'kind': str}.
+    """
+    mapping = parse_mapping_file(input_dir)
+    insumos: dict = {}
+
+    for entry in mapping["archivos"]:
+        filepath = f"{input_dir}/{entry['name']}"
+        hints = parse_hints(entry["description"])
+        try:
+            content = load_file_content(filepath, hints=hints)
+            insumos[entry["name"]] = {
+                "description": entry["description"],
+                "content": content,
+                "size": len(content),
+                "kind": "archivo",
+                "hints": hints,
+            }
+            extras = []
+            if hints["tabs"]:
+                extras.append(f"tabs={hints['tabs']}")
+            extras_str = f" [{', '.join(extras)}]" if extras else ""
+            logger.info(
+                f"    ✓ Archivo: {entry['name']} "
+                f"({len(content)} chars){extras_str}"
+            )
+        except FileNotFoundError:
+            logger.warning(f"    ⚠ Archivo no encontrado: {entry['name']}")
+        except Exception as exc:
+            logger.error(f"    ✗ Error cargando {entry['name']}: {exc}")
+
+    for entry in mapping["tablas"]:
+        table_fqn = entry["name"]
+        hints = parse_hints(entry["description"])
+        try:
+            content = load_table_content(table_fqn, hints=hints)
+            insumos[table_fqn] = {
+                "description": entry["description"],
+                "content": content,
+                "size": len(content),
+                "kind": "tabla",
+                "hints": hints,
+            }
+            extras = []
+            if hints["columns"]:
+                extras.append(f"columns={hints['columns']}")
+            extras_str = f" [{', '.join(extras)}]" if extras else ""
+            logger.info(
+                f"    ✓ Tabla: {table_fqn} "
+                f"({len(content)} chars){extras_str}"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"    ⚠ No se pudo cargar tabla '{table_fqn}': "
+                f"{str(exc)[:200]}"
+            )
+
+    return insumos
+
+
+INSUMOS = load_all_insumos(INPUT_DIR)
+logger.info(f"  Total insumos cargados: {len(INSUMOS)}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Motor de contexto dinámico
+# MAGIC
+# MAGIC Para cada esquema/tabla:
+# MAGIC
+# MAGIC 1. Calcula un **score de relevancia** por insumo.
+# MAGIC 2. Ordena por score descendente.
+# MAGIC 3. Incluye insumos hasta el límite de **30K caracteres**
+# MAGIC    (~7.500 tokens), truncando el último si no cabe.
+
+# COMMAND ----------
+
+MAX_CONTEXT_CHARS = 30_000
+
+
+def _score_relevance(
+    name: str,
+    description: str,
+    content: str,
+    kind: str,
+    schema_name: str,
+    table_name: str = "",
+) -> float:
+    """Calcula el score de relevancia de un insumo."""
+    score = 1.0
+    haystack = (description + " " + name + " " + content[:500]).lower()
+
+    if schema_name and schema_name.lower() in haystack:
+        score += 10.0
+    if table_name and table_name.lower() in haystack:
+        score += 15.0
+
+    if kind == "tabla":
+        score += 4.0
+    else:
+        ext = os.path.splitext(name)[1].lower()
+        if ext == ".docx":
+            score += 3.0
+        elif ext == ".tsv":
+            score += 2.0
+        elif ext in (".md", ".txt"):
+            score += 1.5
+
+    keywords = (
+        "definic", "ejemplo", "comentario", "tabla", "columna",
+        "campo", "negocio", "instruccion", "regla", "glosario",
+        "taxonom",
+    )
+    for kw in keywords:
+        if kw in description.lower():
+            score += 1.0
+
+    return score
+
+
+def build_dynamic_context(
+    insumos: dict,
+    schema_name: str,
+    table_name: str = "",
+    max_chars: int = MAX_CONTEXT_CHARS,
+) -> str:
+    """Construye el bloque de contexto priorizando insumos relevantes."""
+    if not insumos:
+        return ""
+
+    scored = []
+    for name, data in insumos.items():
+        score = _score_relevance(
+            name,
+            data["description"],
+            data["content"],
+            data["kind"],
+            schema_name,
+            table_name,
+        )
+        scored.append((score, name, data))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    parts = []
+    chars_used = 0
+
+    for score, name, data in scored:
+        label = "Tabla" if data["kind"] == "tabla" else "Insumo"
+        header = (
+            f"\n--- {label}: {name} "
+            f"(Propósito: {data['description']}) ---\n"
+        )
+        content = data["content"]
+        entry_size = len(header) + len(content)
+
+        if chars_used + entry_size > max_chars:
+            remaining = max_chars - chars_used - len(header) - 50
+            if remaining > 500:
+                content = (
+                    content[:remaining]
+                    + "\n[... contenido truncado]"
+                )
+                parts.append(header + content)
+                chars_used += len(header) + len(content)
+                logger.info(
+                    f"    Contexto truncado: {name} "
+                    f"({remaining} de {data['size']} chars)"
+                )
+            else:
+                logger.info(
+                    f"    Contexto omitido por límite: {name} "
+                    f"(score={score:.1f})"
+                )
+            break
+
+        parts.append(header + content)
+        chars_used += entry_size
+
+    logger.info(
+        f"    Contexto construido: {chars_used} chars, "
+        f"{len(parts)} insumo(s)"
+    )
+    return "\n".join(parts)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6. Sampling de datos
+# MAGIC
+# MAGIC Cuando `enable_sampling=yes`, toma una muestra aleatoria de cada
+# MAGIC tabla para enriquecer el prompt.
+
+# COMMAND ----------
+
+def get_table_sample(
+    catalog: str,
+    schema: str,
+    table: str,
+    sampling_pct: int = SAMPLING_PCT,
+) -> str:
+    """Obtiene una muestra aleatoria de la tabla como contexto."""
+    fqn = f"`{catalog}`.`{schema}`.`{table}`"
+    try:
+        count_row = spark.sql(
+            f"SELECT COUNT(*) AS cnt FROM {fqn}"
+        ).collect()
+        total_rows = count_row[0]["cnt"]
+
+        if total_rows == 0:
+            logger.info(f"      Sampling {table}: tabla vacía")
+            return "(tabla vacía — sin registros)"
+
+        if total_rows <= 500:
+            sample_size = total_rows
+            logger.info(
+                f"      Sampling {table}: {total_rows} registros "
+                "(todos — tabla pequeña)"
+            )
+        else:
+            fraction = sampling_pct / 100.0
+            sample_size = max(int(total_rows * fraction), 1)
+            logger.info(
+                f"      Sampling {table}: {sample_size} de "
+                f"{total_rows} registros ({sampling_pct}%)"
+            )
+
+        sample_df = spark.sql(
+            f"SELECT * FROM {fqn} ORDER BY RAND() LIMIT {sample_size}"
+        )
+        pdf = sample_df.toPandas().iloc[:30, :20]
+        return pdf.to_string(index=False, max_colwidth=50)
+
+    except Exception as exc:
+        logger.warning(
+            f"      ⚠ Error obteniendo muestra de {fqn}: {exc}"
+        )
+        return f"(error al obtener muestra: {str(exc)[:100]})"
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7. Generación de comentarios
+
+# COMMAND ----------
+
+def _call_model(prompt: str, max_tokens: int = 500) -> str:
+    """Invoca el modelo fundacional vía Foundation Model API."""
+    response = deploy_client.predict(
+        endpoint=MODEL_ENDPOINT,
+        inputs={
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+        },
+    )
+    return response["choices"][0]["message"]["content"].strip()
+
+
+def generate_schema_comment(
+    schema_name: str,
+    tables_in_schema: list,
+    context: str,
+) -> str:
+    """Genera un comentario de negocio para un esquema."""
+    tables_list = ", ".join(tables_in_schema[:30])
+    prompt = (
+        "Eres un experto en documentación de datos orientada a usuarios "
+        "de negocio de una organización.\n"
+        + context
+        + "\nGenera una definición de negocio para el siguiente esquema:"
+        + f"\n\n- Esquema: {schema_name}"
+        + f"\n- Tablas contenidas: {tables_list}\n\n"
+        + "La definición debe:\n"
+        + "- Utilizar solo la información dada en el contexto, no "
+          "conocimiento previo.\n"
+        + "- Explicar el propósito del esquema y el dominio de negocio.\n"
+        + "- Mencionar los principales tipos de datos que contiene.\n"
+        + "- Estar en español, lenguaje claro para usuarios de negocio.\n"
+        + "- Tener máximo 500 caracteres.\n"
+        + "- Responde ÚNICAMENTE con la definición, sin comillas."
+    )
+    return _call_model(prompt)
+
+
+def generate_table_comment(
+    schema_name: str,
+    schema_comment: str,
+    table_name: str,
+    context: str,
+    sample_data: str = "",
+) -> str:
+    """Genera un comentario de negocio para una tabla."""
+    context_block = ""
+    if schema_comment:
+        context_block = (
+            f"\nContexto del esquema '{schema_name}': {schema_comment}\n"
+        )
+
+    sample_block = ""
+    if sample_data:
+        sample_block = (
+            "\nMuestra de datos reales de la tabla:\n"
+            f"```\n{sample_data[:3000]}\n```\n"
+        )
+
+    prompt = (
+        "Eres un experto en documentación de datos orientada a usuarios "
+        "de negocio de una organización.\n"
+        + context
+        + context_block
+        + sample_block
+        + "\nGenera una definición de negocio clara y completa para la "
+          "siguiente tabla:"
+        + f"\n\n- Tabla: {table_name}\n\n"
+        + "La definición debe:\n"
+        + "- Utilizar solo la información dada en el contexto, no "
+          "conocimiento previo.\n"
+        + "- Explicar el nivel de granularidad de la información.\n"
+        + "- Indicar los principales usos en el negocio.\n"
+        + "- Mencionar reglas o lógicas de negocio relevantes.\n"
+        + "- Estar en español, lenguaje claro para usuarios de negocio.\n"
+        + "- Tener máximo 500 caracteres.\n"
+        + "- Responde ÚNICAMENTE con la definición, sin comillas."
+    )
+    return _call_model(prompt)
+
+
+def generate_column_comment(
+    schema_name: str,
+    schema_comment: str,
+    table_name: str,
+    table_comment: str,
+    column_name: str,
+    data_type: str,
+    context: str,
+    sample_data: str = "",
+) -> str:
+    """Genera un comentario de negocio para una columna."""
+    context_block = ""
+    if schema_comment:
+        context_block += f"\nContexto del esquema: {schema_comment}"
+    if table_comment:
+        context_block += (
+            f"\nContexto de la tabla '{table_name}': {table_comment}"
+        )
+    if context_block:
+        context_block += "\n"
+
+    sample_block = ""
+    if sample_data:
+        sample_block = (
+            "\nMuestra de datos reales de la tabla:\n"
+            f"```\n{sample_data[:3000]}\n```\n"
+        )
+
+    prompt = (
+        "Eres un experto en documentación de datos orientada a usuarios "
+        "de negocio de una organización.\n"
+        + context
+        + context_block
+        + sample_block
+        + "\nGenera una definición de negocio clara y completa para la "
+          "siguiente columna:"
+        + f"\n\n- Tabla  : {table_name}"
+        + f"\n- Columna: {column_name}"
+        + f"\n- Tipo   : {data_type}\n\n"
+        + "La definición debe:\n"
+        + "- Describir el propósito o contenido del campo.\n"
+        + "- Usar nombres funcionales si los insumos los proporcionan.\n"
+        + "- Incluir reglas de negocio del campo si el nombre lo sugiere.\n"
+        + "- Explicar posibles valores si es catálogo, indicador o código.\n"
+        + "- Estar en español, lenguaje claro y accesible.\n"
+        + "- Tener máximo 300 caracteres.\n"
+        + "- Responde ÚNICAMENTE con la definición, sin comillas."
+    )
+    return _call_model(prompt, max_tokens=400)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 8. Descubrimiento de esquemas y tablas
+
+# COMMAND ----------
+
+logger.info("ETAPA: Descubrimiento de esquemas y tablas")
+
+
+def discover_schemas(catalog: str, schema_filter: str = "") -> list:
+    """Descubre los esquemas a procesar en el catálogo."""
+    if schema_filter:
+        rows = spark.sql(
+            f"""
+            SELECT schema_name, comment
+            FROM `{catalog}`.information_schema.schemata
+            WHERE catalog_name = '{catalog}'
+              AND schema_name = '{schema_filter}'
+            """
+        ).collect()
+    else:
+        rows = spark.sql(
+            f"""
+            SELECT schema_name, comment
+            FROM `{catalog}`.information_schema.schemata
+            WHERE catalog_name = '{catalog}'
+              AND schema_name NOT IN ('information_schema', 'default')
+            """
+        ).collect()
+
+    schemas = [
+        {"name": r["schema_name"], "comment": r["comment"] or ""}
+        for r in rows
+    ]
+    logger.info(f"  Esquemas encontrados: {len(schemas)}")
+    return schemas
+
+
+def discover_tables_and_columns(catalog: str, schema: str) -> dict:
+    """Descubre todas las tablas y columnas de un esquema."""
+    rows = spark.sql(
+        f"""
+        SELECT
+            c.table_name,
+            c.column_name,
+            c.data_type,
+            c.ordinal_position,
+            t.comment AS table_comment
+        FROM `{catalog}`.information_schema.columns c
+        LEFT JOIN `{catalog}`.information_schema.tables t
+            ON  c.table_catalog = t.table_catalog
+            AND c.table_schema  = t.table_schema
+            AND c.table_name    = t.table_name
+        WHERE c.table_catalog = '{catalog}'
+          AND c.table_schema  = '{schema}'
+        ORDER BY c.table_name, c.ordinal_position
+        """
+    ).collect()
+
+    tables: dict = {}
+    for row in rows:
+        t = row["table_name"]
+        if t not in tables:
+            tables[t] = {
+                "comment": row["table_comment"] or "",
+                "columns": [],
+            }
+        tables[t]["columns"].append(
+            {"name": row["column_name"], "type": row["data_type"]}
+        )
+
+    total_cols = sum(len(t["columns"]) for t in tables.values())
+    logger.info(
+        f"    Tablas en {schema}: {len(tables)}, "
+        f"Columnas: {total_cols}"
+    )
+    return tables
+
+
+schemas_to_process = discover_schemas(CATALOG_NAME, SCHEMA_NAME)
+
+if not schemas_to_process:
+    msg = (
+        f"No se encontraron esquemas en {CATALOG_NAME}"
+        + (f" con filtro '{SCHEMA_NAME}'" if SCHEMA_NAME else "")
+    )
+    logger.error(msg)
+    raise ValueError(msg)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 9. Ejecución principal
+
+# COMMAND ----------
+
+exec_id = str(uuid.uuid4())
+SEP = "=" * 60
+
+logger.info(SEP)
+logger.info("EJECUCIÓN INICIADA")
+logger.info(f"  ID        : {exec_id}")
+logger.info(f"  Timestamp : {_now()} UTC")
+logger.info(
+    f"  Alcance   : {CATALOG_NAME}"
+    + (f".{SCHEMA_NAME}" if SCHEMA_NAME else " (todos los esquemas)")
+)
+logger.info(f"  Modelo    : {MODEL_ENDPOINT}")
+logger.info(
+    f"  Sampling  : {'Sí (' + str(SAMPLING_PCT) + '%)' if ENABLE_SAMPLING else 'No'}"
+)
+logger.info(SEP)
+
+insert_ejecucion(exec_id, "INICIADO")
+
+try:
+    total_schemas_ok = 0
+    total_tables_ok = 0
+    total_columns_ok = 0
+    errors: list = []
+
+    for schema_info in schemas_to_process:
+        current_schema = schema_info["name"]
+        current_schema_comment = schema_info["comment"]
+
+        logger.info(f"\n{'─' * 50}")
+        logger.info(f"ETAPA: Procesando esquema '{current_schema}'")
+        logger.info(f"{'─' * 50}")
+
+        schema_context = build_dynamic_context(
+            INSUMOS, schema_name=current_schema
+        )
+
+        tables = discover_tables_and_columns(CATALOG_NAME, current_schema)
+
+        if not tables:
+            logger.warning(
+                f"  Sin tablas en {current_schema} — saltando"
+            )
+            continue
+
+        table_names = list(tables.keys())
+
+        update_ejecucion(
+            exec_id,
+            "EN_PROCESO",
+            f"Procesando esquema '{current_schema}' — "
+            f"{len(tables)} tabla(s)",
+        )
+
+        try:
+            generated_schema_comment = generate_schema_comment(
+                schema_name=current_schema,
+                tables_in_schema=table_names,
+                context=schema_context,
+            )
+            insert_resultado(
+                exec_id,
+                current_schema,
+                "__esquema__",
+                "__esquema__",
+                generated_schema_comment,
+            )
+            total_schemas_ok += 1
+            logger.info(
+                f"  ✓ [ESQUEMA] {current_schema}: "
+                f"{generated_schema_comment[:100]}..."
+            )
+            if not current_schema_comment:
+                current_schema_comment = generated_schema_comment
+        except Exception as exc:
+            errors.append(
+                f"{current_schema} [esquema]: {str(exc)[:200]}"
+            )
+            logger.error(f"  ✗ Error en comentario de esquema: {exc}")
+
+        for table_name, table_data in tables.items():
+            n_cols = len(table_data["columns"])
+            logger.info(
+                f"\n  TABLA: '{current_schema}.{table_name}' "
+                f"({n_cols} columnas)"
+            )
+
+            update_ejecucion(
+                exec_id,
+                "EN_PROCESO",
+                f"Procesando '{current_schema}.{table_name}' — "
+                f"{total_columns_ok} columnas completadas",
+            )
+
+            table_context = build_dynamic_context(
+                INSUMOS,
+                schema_name=current_schema,
+                table_name=table_name,
+            )
+
+            sample_data = ""
+            if ENABLE_SAMPLING:
+                sample_data = get_table_sample(
+                    CATALOG_NAME,
+                    current_schema,
+                    table_name,
+                    SAMPLING_PCT,
+                )
+
+            generated_table_comment = ""
+            try:
+                generated_table_comment = generate_table_comment(
+                    schema_name=current_schema,
+                    schema_comment=current_schema_comment,
+                    table_name=table_name,
+                    context=table_context,
+                    sample_data=sample_data,
+                )
+                insert_resultado(
+                    exec_id,
+                    current_schema,
+                    table_name,
+                    "__tabla__",
+                    generated_table_comment,
+                )
+                total_tables_ok += 1
+                logger.info(
+                    f"    ✓ [TABLA] {table_name}: "
+                    f"{generated_table_comment[:100]}..."
+                )
+            except Exception as exc:
+                errors.append(
+                    f"{table_name} [tabla]: {str(exc)[:200]}"
+                )
+                logger.error(f"    ✗ Error en comentario de tabla: {exc}")
+                generated_table_comment = table_data["comment"]
+
+            context_for_columns = (
+                generated_table_comment or table_data["comment"]
+            )
+
+            for col in table_data["columns"]:
+                col_name = col["name"]
+                col_type = col["type"]
+                try:
+                    comment = generate_column_comment(
+                        schema_name=current_schema,
+                        schema_comment=current_schema_comment,
+                        table_name=table_name,
+                        table_comment=context_for_columns,
+                        column_name=col_name,
+                        data_type=col_type,
+                        context=table_context,
+                        sample_data=sample_data,
+                    )
+                    insert_resultado(
+                        exec_id,
+                        current_schema,
+                        table_name,
+                        col_name,
+                        comment,
+                    )
+                    total_columns_ok += 1
+                    logger.info(
+                        f"      ✓ {col_name} ({col_type}): "
+                        f"{comment[:90]}..."
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"{table_name}.{col_name}: {str(exc)[:200]}"
+                    )
+                    logger.error(f"      ✗ Error en {col_name}: {exc}")
+
+    logger.info(f"\n{SEP}")
+    logger.info("ETAPA: Finalizando ejecución")
+
+    if errors:
+        estado_final = "COMPLETADO_CON_ERRORES"
+        error_summary = "; ".join(errors[:5])
+        resultado_final = (
+            f"Completado con {len(errors)} error(es). "
+            f"Esquemas: {total_schemas_ok}/{len(schemas_to_process)}. "
+            f"Tablas: {total_tables_ok}. Columnas: {total_columns_ok}. "
+            f"Errores: {error_summary}"
+        )
+    else:
+        estado_final = "COMPLETADO"
+        resultado_final = (
+            f"Exitoso. {total_schemas_ok} esquema(s), "
+            f"{total_tables_ok} tabla(s) y {total_columns_ok} columna(s) "
+            f"documentadas en {CATALOG_NAME}"
+            + (f".{SCHEMA_NAME}" if SCHEMA_NAME else " (todos)")
+        )
+
+    update_ejecucion(exec_id, estado_final, resultado_final)
+
+    logger.info(f"  Estado   : {estado_final}")
+    logger.info(f"  Resultado: {resultado_final}")
+    logger.info(f"  Fin      : {_now()} UTC")
+    logger.info(SEP)
+
+    dbutils.jobs.taskValues.set(key="exec_id", value=exec_id)
+
+except Exception as exc:
+    error_msg = str(exc)[:500]
+    update_ejecucion(
+        exec_id, "ERROR", f"Error inesperado: {error_msg}"
+    )
+    logger.error(f"✗ Error fatal en ejecución {exec_id}: {error_msg}")
+    raise

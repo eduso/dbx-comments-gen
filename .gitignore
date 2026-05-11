@@ -1,36 +1,73 @@
-# Python
+# ── macOS ──────────────────────────────────────────────────────────────────
+.DS_Store
+._*
+Thumbs.db
+
+# ── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.egg-info/
-dist/
+*$py.class
+*.so
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ── Entornos virtuales ─────────────────────────────────────────────────────
 .venv/
 venv/
+env/
+ENV/
 
-# Databricks
-.databricks/
-*.whl
-
-# Environment / Secrets
-.env
-.env.*
-*.tfvars
-
-# IDE
+# ── Editores / IDEs ────────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
+*.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
+# ── Notebooks / Jupyter ────────────────────────────────────────────────────
+.ipynb_checkpoints/
 
-# Input data files (keep structure, user provides their own)
+# ── Databricks ─────────────────────────────────────────────────────────────
+.databricks/
+.databricks-login.json
+.bundle/
+*.whl
+
+# ── Terraform ──────────────────────────────────────────────────────────────
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# ── Logs / temporales ──────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+.cache/
+
+# ── Insumos locales ────────────────────────────────────────────────────────
+# No subir documentos sensibles del directorio input/, solo el mapping
 input/*
 !input/.gitkeep
 !input/mapping.md
 
-# Terraform state
-*.tfstate
-*.tfstate.backup
+# ── Secretos / credenciales ────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
