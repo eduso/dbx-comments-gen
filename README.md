@@ -12,6 +12,7 @@ Generador automático de comentarios de negocio para esquemas, tablas y columnas
 - [Pipelines](#pipelines)
 - [Estructura del repositorio](#estructura-del-repositorio)
 - [Quick start](#quick-start)
+- [Configuración mínima para pruebas](#configuración-mínima-para-pruebas)
 - [Parámetros](#parámetros)
 - [Tabla de scope](#tabla-de-scope)
 - [Insumos de contexto](#insumos-de-contexto)
@@ -155,6 +156,63 @@ enable_sampling=yes,sampling_pct=15
 databricks bundle run comments_audit_pipeline --target dev --profile <profile> \
   --params results_catalog=mi_resultados,results_schema=ai_comments
 ```
+
+---
+
+## Configuración mínima para pruebas
+
+El cuello de botella del pipeline es la **latencia del Foundation Model API**, no Spark. El loop es secuencial por columna y no aprovecha paralelismo, así que conviene un cluster mínimo y barato para validar end-to-end.
+
+### Opción A — Single-node clásico (default del bundle)
+
+Funciona en cualquier workspace. Configuración recomendada para `new_cluster` en `databricks.yml`:
+
+```yaml
+new_cluster: &single_node_cluster
+  spark_version: "15.4.x-scala2.12"
+  num_workers: 0
+  node_type_id: "Standard_D4ads_v5"     # 4 vCPU / 16 GB — ~30% más barato que DS3_v2
+  data_security_mode: "SINGLE_USER"     # requerido para UC + identity columns
+  runtime_engine: "STANDARD"            # Photon off (no aporta a este workload)
+  spark_conf:
+    spark.master: "local[*, 4]"
+    spark.databricks.cluster.profile: "singleNode"
+  custom_tags:
+    ResourceClass: "SingleNode"
+    project: "dbx-comments-gen"
+```
+
+### Opción B — Serverless jobs compute
+
+Si está habilitado en el workspace, es la opción más simple y de arranque más rápido (< 30 s). Reemplaza el bloque `new_cluster: *single_node_cluster` de cada tarea por:
+
+```yaml
+- task_key: setup_schema
+  description: "Crea esquema y tablas de control"
+  notebook_task:
+    notebook_path: src/01_setup_schema.py
+    base_parameters:
+      results_catalog: "{{job.parameters.results_catalog}}"
+      results_schema:  "{{job.parameters.results_schema}}"
+    source: WORKSPACE
+  # ← sin new_cluster: serverless se infiere por ausencia de compute
+```
+
+Aplicar el mismo cambio a las tareas `generate_comments`, `apply_comments` y `audit_comments`.
+
+### Para el dashboard
+
+SQL Warehouse **Serverless 2X-Small** con auto-stop a 10 min es suficiente — las queries son agregaciones simples sobre dos tablas Delta pequeñas.
+
+### Estrategia de prueba mínima
+
+Para validar el pipeline end-to-end con el menor costo posible:
+
+1. **Scope table chiquita**: 1–2 tablas con pocas columnas (≤ 20). El costo crece linealmente con `tablas × columnas`.
+2. `enable_sampling=no` en la primera corrida — evita queries adicionales a las tablas a documentar.
+3. Mantener `model_endpoint=databricks-claude-sonnet-4-5` (pago por token, sin endpoint dedicado).
+4. Correr **solo** `setup_schema + generate_comments` primero (desde la UI del job, deseleccionar `apply_comments`) para revisar los comentarios antes de aplicarlos al catálogo.
+5. La auditoría (`comments_audit_pipeline`) es opcional — saltarla en la primera prueba.
 
 ---
 
