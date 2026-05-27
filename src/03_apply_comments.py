@@ -3,7 +3,11 @@
 # MAGIC # Aplicar comentarios a Unity Catalog
 # MAGIC
 # MAGIC Lee la tabla `resultados` y aplica al catálogo los comentarios cuyo
-# MAGIC `status = 'aprobado'`. Soporta tres niveles:
+# MAGIC `status = 'aprobado'`. El catálogo destino se toma de la columna
+# MAGIC `nombre_catalogo` de cada fila, lo que permite aplicar comentarios
+# MAGIC a múltiples catálogos en una sola ejecución.
+# MAGIC
+# MAGIC Soporta tres niveles:
 # MAGIC
 # MAGIC - **Esquema**: `nombre_tabla='__esquema__'`,
 # MAGIC   `nombre_columna='__esquema__'`.
@@ -12,7 +16,6 @@
 # MAGIC
 # MAGIC ## Parámetros
 # MAGIC
-# MAGIC - `catalog_name` (obligatorio): catálogo destino donde se aplican.
 # MAGIC - `results_catalog` / `results_schema` (obligatorios): donde está
 # MAGIC   `resultados`.
 # MAGIC - `id_ejecucion` (opcional): si se indica, aplica solo los de esa
@@ -22,20 +25,17 @@
 
 import logging
 
-dbutils.widgets.text("catalog_name", "", "Catálogo destino")
 dbutils.widgets.text("results_catalog", "", "Catálogo de resultados")
 dbutils.widgets.text("results_schema", "", "Esquema de resultados")
 dbutils.widgets.text(
     "id_ejecucion", "", "ID de ejecución (vacío = todos los aprobados)"
 )
 
-CATALOG_NAME = dbutils.widgets.get("catalog_name").strip()
 RESULTS_CATALOG = dbutils.widgets.get("results_catalog").strip()
 RESULTS_SCHEMA = dbutils.widgets.get("results_schema").strip()
 ID_EJECUCION = dbutils.widgets.get("id_ejecucion").strip()
 
 _required = {
-    "catalog_name": CATALOG_NAME,
     "results_catalog": RESULTS_CATALOG,
     "results_schema": RESULTS_SCHEMA,
 }
@@ -79,7 +79,6 @@ RESULTS_TABLE = (
 print("=" * 60)
 print("APLICANDO COMENTARIOS APROBADOS")
 print("=" * 60)
-print(f"  Catálogo destino : {CATALOG_NAME}")
 print(f"  Tabla resultados : {RESULTS_CATALOG}.{RESULTS_SCHEMA}.resultados")
 print(f"  ID ejecución     : {ID_EJECUCION or '(todos los aprobados)'}")
 print("=" * 60)
@@ -98,6 +97,7 @@ filter_exec = (
 approved = spark.sql(
     f"""
     SELECT
+        nombre_catalogo,
         nombre_esquema,
         nombre_tabla,
         nombre_columna,
@@ -105,7 +105,7 @@ approved = spark.sql(
     FROM {RESULTS_TABLE}
     WHERE status = 'aprobado'
       {filter_exec}
-    ORDER BY nombre_esquema, nombre_tabla, nombre_columna
+    ORDER BY nombre_catalogo, nombre_esquema, nombre_tabla, nombre_columna
     """
 ).collect()
 
@@ -129,6 +129,7 @@ def _esc(value: str) -> str:
 
 
 def apply_comment(
+    catalog: str,
     schema: str,
     table: str,
     column: str,
@@ -139,18 +140,18 @@ def apply_comment(
 
     if table == "__esquema__" and column == "__esquema__":
         sql = (
-            f"COMMENT ON SCHEMA `{CATALOG_NAME}`.`{schema}` "
+            f"COMMENT ON SCHEMA `{catalog}`.`{schema}` "
             f"IS {comment_sql}"
         )
     elif column == "__tabla__":
         sql = (
             f"COMMENT ON TABLE "
-            f"`{CATALOG_NAME}`.`{schema}`.`{table}` "
+            f"`{catalog}`.`{schema}`.`{table}` "
             f"IS {comment_sql}"
         )
     else:
         sql = (
-            f"ALTER TABLE `{CATALOG_NAME}`.`{schema}`.`{table}` "
+            f"ALTER TABLE `{catalog}`.`{schema}`.`{table}` "
             f"ALTER COLUMN `{column}` COMMENT {comment_sql}"
         )
 
@@ -161,23 +162,33 @@ applied = {"esquemas": 0, "tablas": 0, "columnas": 0}
 errors: list = []
 
 for row in approved:
+    catalog = row["nombre_catalogo"]
     schema = row["nombre_esquema"]
     table = row["nombre_tabla"]
     column = row["nombre_columna"]
     comment = row["comentario"] or ""
 
+    if not catalog:
+        msg = (
+            f"Fila sin nombre_catalogo (esquema={schema}, tabla={table}, "
+            f"columna={column}): se omite"
+        )
+        errors.append(msg)
+        logger.error(f"  ✗ {msg}")
+        continue
+
     target = (
-        f"esquema {schema}"
+        f"esquema {catalog}.{schema}"
         if table == "__esquema__"
         else (
-            f"tabla {schema}.{table}"
+            f"tabla {catalog}.{schema}.{table}"
             if column == "__tabla__"
-            else f"columna {schema}.{table}.{column}"
+            else f"columna {catalog}.{schema}.{table}.{column}"
         )
     )
 
     try:
-        apply_comment(schema, table, column, comment)
+        apply_comment(catalog, schema, table, column, comment)
         if table == "__esquema__":
             applied["esquemas"] += 1
         elif column == "__tabla__":

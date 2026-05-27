@@ -2,20 +2,22 @@
 
 Generador automático de comentarios de negocio para esquemas, tablas y columnas de Unity Catalog usando Foundation Model API de Databricks.
 
-> **Estado:** v5 — pipeline completo (generación + aplicación) con flujo de revisión humana opcional.
+> **Estado:** v6 — scope desde tabla de control, soporte multi-catálogo y proceso de auditoría independiente.
 
 ---
 
 ## Tabla de contenidos
 
 - [¿Qué hace?](#qué-hace)
-- [Pipeline](#pipeline)
+- [Pipelines](#pipelines)
 - [Estructura del repositorio](#estructura-del-repositorio)
 - [Quick start](#quick-start)
 - [Parámetros](#parámetros)
+- [Tabla de scope](#tabla-de-scope)
 - [Insumos de contexto](#insumos-de-contexto)
 - [Tablas de resultados](#tablas-de-resultados)
 - [Flujo de revisión](#flujo-de-revisión)
+- [Auditoría de comentarios](#auditoría-de-comentarios)
 - [Dashboard](#dashboard)
 - [Desarrollo](#desarrollo)
 - [Roadmap](#roadmap)
@@ -25,18 +27,21 @@ Generador automático de comentarios de negocio para esquemas, tablas y columnas
 
 ## ¿Qué hace?
 
-1. Recorre un catálogo de Unity Catalog (o un esquema específico).
+1. Lee una **tabla de control** (scope) que indica qué tablas de Unity Catalog se deben documentar. Las tablas pueden vivir en distintos catálogos.
 2. Genera comentarios de negocio en español para **esquemas**, **tablas** y **columnas** usando un modelo fundacional (default: `databricks-claude-sonnet-4-5`).
 3. Usa como contexto **archivos** del directorio `input/` y/o **tablas** del lakehouse listadas en `input/mapping.md`.
 4. Opcionalmente, muestrea datos reales de cada tabla para enriquecer el prompt.
 5. Persiste resultados en una tabla `resultados` con campos `status` y `user_comments` para flujo de revisión.
-6. Aplica al catálogo los comentarios con `status='aprobado'` (default) vía `COMMENT ON SCHEMA / TABLE` y `ALTER TABLE ... ALTER COLUMN`.
+6. Aplica al catálogo los comentarios con `status='aprobado'` (default) vía `COMMENT ON SCHEMA / TABLE` y `ALTER TABLE ... ALTER COLUMN`. Soporta múltiples catálogos en una sola corrida.
+7. (Opcional) Audita los comentarios generados contra los insumos provistos y un catálogo de criterios declarativo, escribiendo el veredicto en `criterio_fallido` y `detalles_criterio_fallido`.
 
 ---
 
-## Pipeline
+## Pipelines
 
-Tres tareas encadenadas en un solo job `comments_pipeline`:
+El bundle define **dos jobs independientes**:
+
+### `comments_pipeline` — generación + aplicación
 
 ```
 ┌──────────────────┐    ┌────────────────────┐    ┌──────────────────┐
@@ -45,11 +50,23 @@ Tres tareas encadenadas en un solo job `comments_pipeline`:
 └──────────────────┘    └────────────────────┘    └──────────────────┘
         │                        │                          │
         ▼                        ▼                          ▼
-  ejecuciones /            information_schema       COMMENT ON / ALTER
-  resultados               + Foundation Model API   sobre Unity Catalog
+  ejecuciones /            scope_table              COMMENT ON / ALTER
+  resultados            + information_schema        sobre Unity Catalog
+                        + Foundation Model API
 ```
 
-Por defecto todos los comentarios se insertan con `status='aprobado'`, así que el pipeline ejecuta de punta a punta. Para un flujo con revisión humana, ver [Flujo de revisión](#flujo-de-revisión).
+Por defecto todos los comentarios se insertan con `status='aprobado'`, así que el pipeline ejecuta de punta a punta. Para un flujo con revisión humana ver [Flujo de revisión](#flujo-de-revisión).
+
+### `comments_audit_pipeline` — auditoría
+
+```
+┌──────────────────┐
+│ audit_comments   │  Lee resultados + insumos (mapping.md +
+│ (LLM auditor)    │  audit_mapping.md) y escribe veredicto en
+└──────────────────┘  criterio_fallido / detalles_criterio_fallido.
+```
+
+Independiente del job principal. No modifica `status` ni el contenido del comentario.
 
 ---
 
@@ -57,17 +74,20 @@ Por defecto todos los comentarios se insertan con `status='aprobado'`, así que 
 
 ```
 dbx-comments-gen/
-├── databricks.yml                # Bundle: pipeline, dashboard, vars, targets
+├── databricks.yml                # Bundle: jobs, dashboard, vars, targets
 ├── README.md
 ├── CLAUDE.md                     # Instrucciones para Claude Code
 ├── .gitignore
 ├── input/
 │   ├── mapping.md                # Insumos: archivos y tablas
+│   ├── audit_mapping.md          # Insumos extra solo para auditoría
 │   └── (documentos del usuario)
 └── src/
     ├── 01_setup_schema.py        # DDL: esquema + ejecuciones + resultados
-    ├── 02_generate_comments.py   # Generador con IA
-    ├── 03_apply_comments.py      # Aplicador de comentarios aprobados
+    ├── 02_generate_comments.py   # Generador con IA (desde scope_table)
+    ├── 03_apply_comments.py      # Aplicador multi-catálogo
+    ├── 04_audit_comments.py      # Auditor independiente
+    ├── audit_criteria.py         # Catálogo declarativo de criterios
     └── dashboard.lvdash.json     # Dashboard Lakeview
 ```
 
@@ -80,16 +100,17 @@ dbx-comments-gen/
 - Databricks CLI v0.200+ con un perfil autenticado.
 - Workspace con permisos para crear catálogos, esquemas, jobs y dashboards.
 - Un SQL Warehouse disponible.
+- Una **tabla de scope** existente en Unity Catalog (ver [Tabla de scope](#tabla-de-scope)).
 
 ### 2. Configurar el bundle
 
-Edita `databricks.yml` y reemplaza los placeholders:
+Edita `databricks.yml` y reemplaza los placeholders en `targets:`:
 
 ```yaml
 targets:
   dev:
     workspace:
-      host: https://<tu-workspace>.azuredatabricks.net   # ← tu workspace
+      host: https://<tu-workspace>.azuredatabricks.net
   prod:
     workspace:
       host: https://<tu-workspace-prod>.azuredatabricks.net
@@ -109,7 +130,7 @@ main.referencia.glosario_negocio: Glosario corporativo de términos
 main.referencia.taxonomia_productos: Taxonomía de productos
 ```
 
-Y coloca los archivos referenciados en `input/`. Si una tabla no es accesible, el proceso emite un warning y continúa sin ella.
+Coloca los archivos referenciados en `input/`. Si una tabla no es accesible, el proceso emite warning y continúa sin ella.
 
 ### 4. Desplegar y ejecutar
 
@@ -120,28 +141,81 @@ databricks bundle validate --target dev --profile <profile>
 # Desplegar
 databricks bundle deploy --target dev --profile <profile>
 
-# Ejecutar con todos los parámetros
+# Ejecutar el pipeline de generación + aplicación
 databricks bundle run comments_pipeline --target dev --profile <profile> \
-  --params catalog_name=mi_catalogo,schema_name=ventas,\
-results_catalog=mi_resultados,results_schema=ai_comments,\
+  --params scope_table=main.control.scope_documentacion,\
+scope_catalog_column=catalog_name,\
+scope_schema_column=schema_name,\
+scope_table_column=table_name,\
+results_catalog=mi_resultados,\
+results_schema=ai_comments,\
 enable_sampling=yes,sampling_pct=15
+
+# (Opcional) Ejecutar la auditoría sobre los comentarios persistidos
+databricks bundle run comments_audit_pipeline --target dev --profile <profile> \
+  --params results_catalog=mi_resultados,results_schema=ai_comments
 ```
 
 ---
 
 ## Parámetros
 
-Todos son obligatorios excepto `model_endpoint`, `schema_name`, `enable_sampling` y `sampling_pct`.
+### `comments_pipeline`
 
 | Parámetro | Descripción | Default |
 |-----------|-------------|---------|
-| `catalog_name` | Catálogo de Unity Catalog a procesar | _(obligatorio)_ |
-| `schema_name` | Esquema específico. Vacío = todo el catálogo | _(vacío)_ |
+| `scope_table` | Tabla de control `catalogo.esquema.tabla` con los objetos a documentar | _(obligatorio)_ |
+| `scope_catalog_column` | Nombre de la columna de `scope_table` que contiene el catálogo | _(obligatorio)_ |
+| `scope_schema_column` | Nombre de la columna que contiene el esquema | _(obligatorio)_ |
+| `scope_table_column` | Nombre de la columna que contiene la tabla | _(obligatorio)_ |
 | `model_endpoint` | Endpoint del modelo fundacional | `databricks-claude-sonnet-4-5` |
 | `results_catalog` | Catálogo donde se guardan los resultados | _(obligatorio)_ |
 | `results_schema` | Esquema donde se guardan los resultados | _(obligatorio)_ |
 | `enable_sampling` | Habilitar muestreo de datos reales (`yes`/`no`) | `no` |
 | `sampling_pct` | Porcentaje para tablas > 500 registros (1-100) | _(requerido si sampling=yes)_ |
+
+### `comments_audit_pipeline`
+
+| Parámetro | Descripción | Default |
+|-----------|-------------|---------|
+| `results_catalog` | Catálogo donde está la tabla `resultados` | _(obligatorio)_ |
+| `results_schema` | Esquema donde está la tabla `resultados` | _(obligatorio)_ |
+| `id_ejecucion` | ID de ejecución a auditar. Vacío = todas las filas | _(vacío)_ |
+| `audit_only_approved` | Auditar solo filas con `status='aprobado'` (`yes`/`no`) | `yes` |
+| `audit_model_endpoint` | Modelo a usar como auditor | `databricks-claude-sonnet-4-5` |
+
+---
+
+## Tabla de scope
+
+A partir de v6 el generador no recorre un catálogo completo, sino que lee una **tabla de control** suministrada por el usuario. Esto permite:
+
+- Documentar tablas de **múltiples catálogos** en una sola corrida.
+- Mantener listas curadas de objetos a documentar (por dominio, por proyecto, por sprint…).
+- Versionar el alcance fuera del notebook.
+
+### Formato esperado
+
+La tabla debe tener al menos tres columnas con los nombres del catálogo, esquema y tabla. Los nombres exactos se configuran vía parámetros (`scope_catalog_column`, `scope_schema_column`, `scope_table_column`).
+
+Ejemplo:
+
+```sql
+CREATE TABLE main.control.scope_documentacion (
+    catalog_name STRING,
+    schema_name  STRING,
+    table_name   STRING,
+    prioridad    INT,
+    dominio      STRING
+);
+
+INSERT INTO main.control.scope_documentacion VALUES
+    ('ventas',    'mart',     'fact_pedidos',  1, 'comercial'),
+    ('ventas',    'mart',     'dim_cliente',   1, 'comercial'),
+    ('finanzas',  'staging',  'movimientos',   2, 'finanzas');
+```
+
+Filas con valores nulos o vacíos en cualquiera de las tres columnas se omiten. Las combinaciones `(catalogo, esquema, tabla)` se deduplican automáticamente. Si una tabla del scope no existe o no se tiene permiso, se omite con warning.
 
 ---
 
@@ -224,12 +298,15 @@ Se crean automáticamente en `{results_catalog}.{results_schema}`.
 | `id_resultado` | BIGINT (PK, identity) | ID autoincrementable |
 | `id_ejecucion` | STRING (FK) | Referencia a `ejecuciones.id_ejecucion` |
 | `fecha_resultado` | TIMESTAMP | Fecha/hora UTC de generación |
+| **`nombre_catalogo`** | VARCHAR(255) | Catálogo de la tabla procesada |
 | `nombre_esquema` | VARCHAR(255) | Esquema procesado |
 | `nombre_tabla` | VARCHAR(255) | Tabla procesada (`__esquema__` para esquemas) |
 | `nombre_columna` | VARCHAR(255) | Columna procesada (`__tabla__` para tablas, `__esquema__` para esquemas) |
 | `comentario` | VARCHAR(4000) | Comentario generado por IA |
-| **`status`** | VARCHAR(20) | `por revisar`, `aprobado` (default), `rechazado` |
-| **`user_comments`** | VARCHAR(4000) | Comentarios del revisor (vacío por defecto) |
+| `status` | VARCHAR(20) | `por revisar`, `aprobado` (default), `rechazado` |
+| `user_comments` | VARCHAR(4000) | Comentarios del revisor (vacío por defecto) |
+| **`criterio_fallido`** | STRING | Criterio de auditoría fallido (NULL si OK). Lo escribe `04_audit_comments` |
+| **`detalles_criterio_fallido`** | STRING | Justificación del criterio fallido (NULL si OK) |
 
 Ambas tablas tienen `delta.enableChangeDataFeed = true`. La columna `status` tiene un `CHECK` constraint para los tres valores permitidos.
 
@@ -240,7 +317,8 @@ Ambas tablas tienen `delta.enableChangeDataFeed = true`. La columna `status` tie
 El default `status='aprobado'` significa que el pipeline aplica automáticamente todos los comentarios generados. Para revisar antes de aplicar:
 
 1. **Ejecutar solo `setup_schema` + `generate_comments`** (desde la UI de Databricks, seleccionar y correr solo esas tareas).
-2. **Revisar y actualizar** los registros:
+2. **(Opcional) Correr la auditoría** (`comments_audit_pipeline`) para obtener un primer screening automático.
+3. **Revisar y actualizar** los registros:
    ```sql
    UPDATE my_results.ai_comments.resultados
    SET status = 'por revisar',
@@ -252,13 +330,58 @@ El default `status='aprobado'` significa que el pipeline aplica automáticamente
        user_comments = 'El término no aplica para nuestro negocio'
    WHERE id_resultado IN (123, 456);
    ```
-3. **Aprobar lo que esté bien**:
+4. **Aprobar lo que esté bien**:
    ```sql
    UPDATE my_results.ai_comments.resultados
    SET status = 'aprobado'
    WHERE id_ejecucion = '<exec-id>' AND status = 'por revisar';
    ```
-4. **Ejecutar `apply_comments`** (manualmente desde la UI), opcionalmente filtrando por `id_ejecucion`.
+5. **Ejecutar `apply_comments`** (manualmente desde la UI), opcionalmente filtrando por `id_ejecucion`.
+
+---
+
+## Auditoría de comentarios
+
+A partir de v6 existe un proceso independiente (`04_audit_comments.py`, expuesto como job `comments_audit_pipeline`) que evalúa cada comentario contra los insumos provistos usando un LLM como auditor.
+
+### Cómo funciona
+
+1. Carga insumos de `input/mapping.md` **y** `input/audit_mapping.md` (este último es opcional y solo lo lee la auditoría — útil para glosarios estrictos, lineamientos editoriales, ejemplos correctos/incorrectos, etc.).
+2. Lee las filas de `resultados` (filtrables por `id_ejecucion` y por `status='aprobado'`).
+3. Para cada fila construye un prompt con el contexto relevante y le pide al modelo un veredicto en JSON.
+4. Si el comentario está bien: escribe `NULL` en `criterio_fallido` / `detalles_criterio_fallido` (idempotente — borra veredictos previos).
+5. Si falla un criterio: escribe el `id` del criterio en `criterio_fallido` y una justificación corta en `detalles_criterio_fallido`.
+
+**Nunca modifica `status` ni el contenido del comentario**. La decisión final de aprobar/rechazar sigue siendo humana.
+
+### Catálogo de criterios
+
+Definido de forma declarativa en `src/audit_criteria.py`. Para agregar/quitar/modificar un criterio basta editar ese archivo:
+
+| ID | Detecta |
+|----|---------|
+| `FUERA_DE_CONTEXTO` | Afirmaciones no respaldadas por los insumos (alucinación). |
+| `TERMINOLOGIA_INCORRECTA` | Uso de términos distintos a los canónicos del glosario. |
+| `GRANULARIDAD` | Comentario con nivel incorrecto (p. ej. una columna describe la tabla). |
+| `IDIOMA_O_ESTILO` | Idioma, longitud, formato markdown, prefijos tipo `Definición:`, etc. |
+| `INFORMACION_FALTANTE` | Omite información clave disponible en los insumos. |
+
+Cada criterio tiene un `id` (string corto en MAYÚSCULAS) y un `description` que se inyecta literalmente en el prompt del auditor.
+
+### Ejecución
+
+```bash
+# Auditar todas las filas aprobadas
+databricks bundle run comments_audit_pipeline --target dev --profile <profile> \
+  --params results_catalog=mi_resultados,results_schema=ai_comments
+
+# Auditar una ejecución específica, incluyendo no-aprobadas
+databricks bundle run comments_audit_pipeline --target dev --profile <profile> \
+  --params results_catalog=mi_resultados,results_schema=ai_comments,\
+id_ejecucion=<exec-id>,audit_only_approved=no
+```
+
+Si la auditoría se lanza directamente después de `generate_comments` (encadenada manualmente o desde una orquestación externa), toma automáticamente el `id_ejecucion` mediante `taskValues`.
 
 ---
 
@@ -275,6 +398,7 @@ Recurso DAB: `comments_dashboard` (archivo `src/dashboard.lvdash.json`).
 | `results_catalog` | Catálogo donde están las tablas de resultados |
 | `results_schema` | Esquema donde están las tablas de resultados |
 | `fecha` | Filtra todo por fecha de ejecución |
+| `catalogo` | Filtra por catálogo procesado |
 | `esquema` | Filtra por esquema procesado |
 | `tabla` | Filtra por tabla procesada (multi-select) |
 | `status` | Filtra por estado de revisión |
@@ -283,10 +407,10 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 
 **Widgets:**
 
-- Filtros: catálogo/esquema (dataset), fecha, esquema, tabla, status.
-- KPIs: ejecuciones, comentarios, esquemas, tablas, aprobados, por revisar, rechazados.
+- Filtros: catálogo/esquema (dataset), fecha, catálogo, esquema, tabla, status.
+- KPIs: ejecuciones, comentarios, catálogos, esquemas, tablas, aprobados, por revisar, rechazados.
 - Tabla: historial de ejecuciones.
-- Tabla: detalle de comentarios (incluye `status` y `user_comments`).
+- Tabla: detalle de comentarios (incluye `status`, `user_comments`, `criterio_fallido` y `detalles_criterio_fallido`).
 
 ---
 
@@ -303,9 +427,11 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 
 | Quieres cambiar... | Edita... |
 |--------------------|----------|
-| Prompt enviado al modelo | `02_generate_comments.py` → `generate_*_comment` |
+| Prompt enviado al modelo generador | `02_generate_comments.py` → `generate_*_comment` |
+| Prompt del auditor | `04_audit_comments.py` → `audit_row` |
+| Catálogo de criterios | `audit_criteria.py` → `AUDIT_CRITERIA` |
 | Scoring de relevancia | `02_generate_comments.py` → `_score_relevance` |
-| Límite de contexto | `02_generate_comments.py` → `MAX_CONTEXT_CHARS` |
+| Límite de contexto | `02_generate_comments.py` / `04_audit_comments.py` → `MAX_CONTEXT_CHARS` |
 | Reglas de sampling | `02_generate_comments.py` → `get_table_sample` |
 | Esquema de tablas de control | `01_setup_schema.py` |
 | Lógica de aplicación | `03_apply_comments.py` → `apply_comment` |
@@ -325,16 +451,24 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 - [ ] **Modo dry-run** — generar prompts sin invocar al modelo (debug).
 - [ ] **Reintentos** con backoff exponencial cuando el endpoint falla.
 - [ ] **Paralelismo** en generación de columnas dentro de una tabla.
-- [ ] **Evaluación de calidad** (LLM-as-judge sobre los generados).
+- [ ] **Auditoría → status automático** (opt-in para mover a `por revisar` cuando hay observación).
 - [ ] **Soporte multilenguaje** (`output_language=es|en|pt`).
-- [ ] **Filtros include/exclude** por pattern de tablas.
 - [ ] **Marcador de "aplicado"** en `resultados` para evitar reaplicar.
 
 ---
 
 ## Release notes
 
-### v5 (en curso)
+### v6 (en curso)
+
+- **Scope desde tabla de control**: el generador ya no recorre catálogos completos. Lee una tabla configurable (`scope_table` + tres columnas con catálogo/esquema/tabla) y procesa exactamente esos objetos. Permite mezclar varios catálogos en una sola corrida.
+- **Soporte multi-catálogo**: la tabla `resultados` ahora persiste `nombre_catalogo`, y `apply_comments` aplica los comentarios al catálogo correcto fila por fila.
+- **Proceso de auditoría** (`04_audit_comments.py` + job `comments_audit_pipeline`): notebook independiente que evalúa los comentarios contra los insumos provistos usando un LLM, escribe veredicto en `criterio_fallido` / `detalles_criterio_fallido` y es idempotente.
+- **Catálogo declarativo de criterios** en `src/audit_criteria.py` (`FUERA_DE_CONTEXTO`, `TERMINOLOGIA_INCORRECTA`, `GRANULARIDAD`, `IDIOMA_O_ESTILO`, `INFORMACION_FALTANTE`).
+- **Nuevo archivo de insumos** `input/audit_mapping.md`: insumos extra que solo carga la auditoría (glosarios estrictos, lineamientos editoriales, ejemplos buenos/malos, etc.).
+- **Dashboard ampliado**: filtro y KPI por `catalogo`, columnas `Criterio fallido` y `Detalles criterio fallido` en la tabla de detalle.
+
+### v5
 
 - **Pipeline completo**: nueva tarea `apply_comments` que aplica al catálogo los comentarios con `status='aprobado'`.
 - **Tablas como insumo**: `input/mapping.md` ahora soporta una sección `# Tablas` con tablas de Unity Catalog. Si no son accesibles, warning y continúa.

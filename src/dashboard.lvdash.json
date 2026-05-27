@@ -5,12 +5,15 @@
       "displayName": "Resultados de comentarios",
       "queryLines": [
         "SELECT\n",
+        "  r.nombre_catalogo AS Catalogo,\n",
         "  r.nombre_esquema AS Esquema,\n",
         "  r.nombre_tabla AS Tabla,\n",
         "  r.nombre_columna AS Columna,\n",
         "  r.comentario AS `Comentario generado`,\n",
         "  r.status AS `Status revision`,\n",
         "  r.user_comments AS `Comentarios revisor`,\n",
+        "  r.criterio_fallido AS `Criterio fallido`,\n",
+        "  r.detalles_criterio_fallido AS `Detalles criterio fallido`,\n",
         "  r.fecha_resultado AS `Fecha resultado`,\n",
         "  e.id_ejecucion AS `ID ejecucion`,\n",
         "  e.estado AS `Estado ejecucion`,\n",
@@ -19,6 +22,7 @@
         "JOIN IDENTIFIER(:results_catalog || '.' || :results_schema || '.ejecuciones') e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
+        "  AND (:catalogo IS NULL OR r.nombre_catalogo = :catalogo)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",
         "  AND (:tabla IS NULL OR r.nombre_tabla = :tabla)\n",
         "  AND (:status IS NULL OR r.status = :status)\n",
@@ -41,6 +45,12 @@
           "displayName": "fecha",
           "keyword": "fecha",
           "dataType": "DATE",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "catalogo",
+          "keyword": "catalogo",
+          "dataType": "STRING",
           "defaultSelection": {}
         },
         {
@@ -108,6 +118,7 @@
         "SELECT\n",
         "  COUNT(DISTINCT e.id_ejecucion) AS `Total ejecuciones`,\n",
         "  COUNT(r.id_resultado) AS `Total comentarios`,\n",
+        "  COUNT(DISTINCT r.nombre_catalogo) AS `Catalogos procesados`,\n",
         "  COUNT(DISTINCT r.nombre_esquema) AS `Esquemas procesados`,\n",
         "  COUNT(DISTINCT r.nombre_tabla) AS `Tablas procesadas`,\n",
         "  SUM(CASE WHEN r.status = 'aprobado' THEN 1 ELSE 0 END) AS `Aprobados`,\n",
@@ -117,6 +128,7 @@
         "LEFT JOIN IDENTIFIER(:results_catalog || '.' || :results_schema || '.resultados') r\n",
         "  ON e.id_ejecucion = r.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
+        "  AND (:catalogo IS NULL OR r.nombre_catalogo = :catalogo)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",
         "  AND (:tabla IS NULL OR r.nombre_tabla = :tabla)\n",
         "  AND (:status IS NULL OR r.status = :status)"
@@ -138,6 +150,12 @@
           "displayName": "fecha",
           "keyword": "fecha",
           "dataType": "DATE",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "catalogo",
+          "keyword": "catalogo",
+          "dataType": "STRING",
           "defaultSelection": {}
         },
         {
@@ -185,15 +203,15 @@
       ]
     },
     {
-      "name": "ds_filtro_esquema",
-      "displayName": "Filtro esquema",
+      "name": "ds_filtro_catalogo",
+      "displayName": "Filtro catalogo",
       "queryLines": [
-        "SELECT DISTINCT r.nombre_esquema\n",
+        "SELECT DISTINCT r.nombre_catalogo\n",
         "FROM IDENTIFIER(:results_catalog || '.' || :results_schema || '.resultados') r\n",
         "JOIN IDENTIFIER(:results_catalog || '.' || :results_schema || '.ejecuciones') e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
-        "ORDER BY r.nombre_esquema"
+        "ORDER BY r.nombre_catalogo"
       ],
       "parameters": [
         {
@@ -217,6 +235,45 @@
       ]
     },
     {
+      "name": "ds_filtro_esquema",
+      "displayName": "Filtro esquema",
+      "queryLines": [
+        "SELECT DISTINCT r.nombre_esquema\n",
+        "FROM IDENTIFIER(:results_catalog || '.' || :results_schema || '.resultados') r\n",
+        "JOIN IDENTIFIER(:results_catalog || '.' || :results_schema || '.ejecuciones') e\n",
+        "  ON r.id_ejecucion = e.id_ejecucion\n",
+        "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
+        "  AND (:catalogo IS NULL OR r.nombre_catalogo = :catalogo)\n",
+        "ORDER BY r.nombre_esquema"
+      ],
+      "parameters": [
+        {
+          "displayName": "results_catalog",
+          "keyword": "results_catalog",
+          "dataType": "STRING",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "results_schema",
+          "keyword": "results_schema",
+          "dataType": "STRING",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "fecha",
+          "keyword": "fecha",
+          "dataType": "DATE",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "catalogo",
+          "keyword": "catalogo",
+          "dataType": "STRING",
+          "defaultSelection": {}
+        }
+      ]
+    },
+    {
       "name": "ds_filtro_tabla",
       "displayName": "Filtro tabla",
       "queryLines": [
@@ -225,6 +282,7 @@
         "JOIN IDENTIFIER(:results_catalog || '.' || :results_schema || '.ejecuciones') e\n",
         "  ON r.id_ejecucion = e.id_ejecucion\n",
         "WHERE (:fecha IS NULL OR CAST(e.fecha_ejecucion AS DATE) = :fecha)\n",
+        "  AND (:catalogo IS NULL OR r.nombre_catalogo = :catalogo)\n",
         "  AND (:esquema IS NULL OR r.nombre_esquema = :esquema)\n",
         "ORDER BY r.nombre_tabla"
       ],
@@ -245,6 +303,12 @@
           "displayName": "fecha",
           "keyword": "fecha",
           "dataType": "DATE",
+          "defaultSelection": {}
+        },
+        {
+          "displayName": "catalogo",
+          "keyword": "catalogo",
+          "dataType": "STRING",
           "defaultSelection": {}
         },
         {
@@ -313,6 +377,16 @@
                 }
               },
               {
+                "name": "param_ds_filtro_catalogo_results_catalog",
+                "query": {
+                  "datasetName": "ds_filtro_catalogo",
+                  "parameters": [
+                    {"name": "results_catalog", "keyword": "results_catalog"}
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "param_ds_filtro_esquema_results_catalog",
                 "query": {
                   "datasetName": "ds_filtro_esquema",
@@ -343,6 +417,7 @@
                   {"parameterName": "results_catalog", "queryName": "param_ds_ejecuciones_results_catalog"},
                   {"parameterName": "results_catalog", "queryName": "param_ds_kpi_results_catalog"},
                   {"parameterName": "results_catalog", "queryName": "param_ds_filtro_fecha_results_catalog"},
+                  {"parameterName": "results_catalog", "queryName": "param_ds_filtro_catalogo_results_catalog"},
                   {"parameterName": "results_catalog", "queryName": "param_ds_filtro_esquema_results_catalog"},
                   {"parameterName": "results_catalog", "queryName": "param_ds_filtro_tabla_results_catalog"}
                 ]
@@ -396,6 +471,16 @@
                 }
               },
               {
+                "name": "param_ds_filtro_catalogo_results_schema",
+                "query": {
+                  "datasetName": "ds_filtro_catalogo",
+                  "parameters": [
+                    {"name": "results_schema", "keyword": "results_schema"}
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "param_ds_filtro_esquema_results_schema",
                 "query": {
                   "datasetName": "ds_filtro_esquema",
@@ -426,6 +511,7 @@
                   {"parameterName": "results_schema", "queryName": "param_ds_ejecuciones_results_schema"},
                   {"parameterName": "results_schema", "queryName": "param_ds_kpi_results_schema"},
                   {"parameterName": "results_schema", "queryName": "param_ds_filtro_fecha_results_schema"},
+                  {"parameterName": "results_schema", "queryName": "param_ds_filtro_catalogo_results_schema"},
                   {"parameterName": "results_schema", "queryName": "param_ds_filtro_esquema_results_schema"},
                   {"parameterName": "results_schema", "queryName": "param_ds_filtro_tabla_results_schema"}
                 ]
@@ -474,6 +560,14 @@
                 }
               },
               {
+                "name": "param_ds_filtro_catalogo_fecha",
+                "query": {
+                  "datasetName": "ds_filtro_catalogo",
+                  "parameters": [{"name": "fecha", "keyword": "fecha"}],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "param_ds_filtro_esquema_fecha",
                 "query": {
                   "datasetName": "ds_filtro_esquema",
@@ -500,6 +594,7 @@
                   {"parameterName": "fecha", "queryName": "param_ds_resultados_fecha"},
                   {"parameterName": "fecha", "queryName": "param_ds_ejecuciones_fecha"},
                   {"parameterName": "fecha", "queryName": "param_ds_kpi_fecha"},
+                  {"parameterName": "fecha", "queryName": "param_ds_filtro_catalogo_fecha"},
                   {"parameterName": "fecha", "queryName": "param_ds_filtro_esquema_fecha"},
                   {"parameterName": "fecha", "queryName": "param_ds_filtro_tabla_fecha"}
                 ]
@@ -507,6 +602,71 @@
             }
           },
           "position": {"x": 6, "y": 0, "width": 2, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "filter_catalogo",
+            "queries": [
+              {
+                "name": "filtro_catalogo_values",
+                "query": {
+                  "datasetName": "ds_filtro_catalogo",
+                  "fields": [
+                    {"name": "nombre_catalogo", "expression": "`nombre_catalogo`"},
+                    {"name": "nombre_catalogo_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)"}
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "param_ds_resultados_catalogo",
+                "query": {
+                  "datasetName": "ds_resultados",
+                  "parameters": [{"name": "catalogo", "keyword": "catalogo"}],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "param_ds_kpi_catalogo",
+                "query": {
+                  "datasetName": "ds_kpi_ejecuciones",
+                  "parameters": [{"name": "catalogo", "keyword": "catalogo"}],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "param_ds_filtro_esquema_catalogo",
+                "query": {
+                  "datasetName": "ds_filtro_esquema",
+                  "parameters": [{"name": "catalogo", "keyword": "catalogo"}],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "param_ds_filtro_tabla_catalogo",
+                "query": {
+                  "datasetName": "ds_filtro_tabla",
+                  "parameters": [{"name": "catalogo", "keyword": "catalogo"}],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {"showTitle": true, "title": "Catalogo (opcional)"},
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {"fieldName": "nombre_catalogo", "queryName": "filtro_catalogo_values"},
+                  {"parameterName": "catalogo", "queryName": "param_ds_resultados_catalogo"},
+                  {"parameterName": "catalogo", "queryName": "param_ds_kpi_catalogo"},
+                  {"parameterName": "catalogo", "queryName": "param_ds_filtro_esquema_catalogo"},
+                  {"parameterName": "catalogo", "queryName": "param_ds_filtro_tabla_catalogo"}
+                ]
+              }
+            }
+          },
+          "position": {"x": 8, "y": 0, "width": 2, "height": 1}
         },
         {
           "widget": {
@@ -562,7 +722,7 @@
               }
             }
           },
-          "position": {"x": 8, "y": 0, "width": 2, "height": 1}
+          "position": {"x": 10, "y": 0, "width": 2, "height": 1}
         },
         {
           "widget": {
@@ -609,7 +769,7 @@
               }
             }
           },
-          "position": {"x": 10, "y": 0, "width": 2, "height": 1}
+          "position": {"x": 0, "y": 1, "width": 3, "height": 1}
         },
         {
           "widget": {
@@ -656,7 +816,7 @@
               }
             }
           },
-          "position": {"x": 0, "y": 1, "width": 3, "height": 1}
+          "position": {"x": 3, "y": 1, "width": 3, "height": 1}
         },
         {
           "widget": {
@@ -686,14 +846,14 @@
         },
         {
           "widget": {
-            "name": "kpi_comentarios",
+            "name": "kpi_catalogos",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
                   "datasetName": "ds_kpi_ejecuciones",
                   "fields": [
-                    {"name": "Total comentarios", "expression": "`Total comentarios`"}
+                    {"name": "Catalogos procesados", "expression": "`Catalogos procesados`"}
                   ],
                   "disaggregated": true
                 }
@@ -701,10 +861,10 @@
             ],
             "spec": {
               "version": 2,
-              "frame": {"showTitle": true, "title": "Comentarios generados"},
+              "frame": {"showTitle": true, "title": "Catalogos procesados"},
               "widgetType": "counter",
               "encodings": {
-                "value": {"fieldName": "Total comentarios", "displayName": "Total comentarios"}
+                "value": {"fieldName": "Catalogos procesados", "displayName": "Catalogos procesados"}
               }
             }
           },
@@ -764,6 +924,32 @@
         },
         {
           "widget": {
+            "name": "kpi_comentarios",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi_ejecuciones",
+                  "fields": [
+                    {"name": "Total comentarios", "expression": "`Total comentarios`"}
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {"showTitle": true, "title": "Comentarios generados"},
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "Total comentarios", "displayName": "Total comentarios"}
+              }
+            }
+          },
+          "position": {"x": 0, "y": 4, "width": 3, "height": 2}
+        },
+        {
+          "widget": {
             "name": "kpi_aprobados",
             "queries": [
               {
@@ -786,7 +972,7 @@
               }
             }
           },
-          "position": {"x": 0, "y": 4, "width": 4, "height": 2}
+          "position": {"x": 3, "y": 4, "width": 3, "height": 2}
         },
         {
           "widget": {
@@ -812,7 +998,7 @@
               }
             }
           },
-          "position": {"x": 4, "y": 4, "width": 4, "height": 2}
+          "position": {"x": 6, "y": 4, "width": 3, "height": 2}
         },
         {
           "widget": {
@@ -838,7 +1024,7 @@
               }
             }
           },
-          "position": {"x": 8, "y": 4, "width": 4, "height": 2}
+          "position": {"x": 9, "y": 4, "width": 3, "height": 2}
         },
         {
           "widget": {
@@ -883,12 +1069,15 @@
                 "query": {
                   "datasetName": "ds_resultados",
                   "fields": [
+                    {"name": "Catalogo", "expression": "`Catalogo`"},
                     {"name": "Esquema", "expression": "`Esquema`"},
                     {"name": "Tabla", "expression": "`Tabla`"},
                     {"name": "Columna", "expression": "`Columna`"},
                     {"name": "Comentario generado", "expression": "`Comentario generado`"},
                     {"name": "Status revision", "expression": "`Status revision`"},
                     {"name": "Comentarios revisor", "expression": "`Comentarios revisor`"},
+                    {"name": "Criterio fallido", "expression": "`Criterio fallido`"},
+                    {"name": "Detalles criterio fallido", "expression": "`Detalles criterio fallido`"},
                     {"name": "Fecha resultado", "expression": "`Fecha resultado`"},
                     {"name": "Estado ejecucion", "expression": "`Estado ejecucion`"}
                   ],
@@ -902,12 +1091,15 @@
               "widgetType": "table",
               "encodings": {
                 "columns": [
+                  {"fieldName": "Catalogo", "title": "Catalogo"},
                   {"fieldName": "Esquema", "title": "Esquema"},
                   {"fieldName": "Tabla", "title": "Tabla"},
                   {"fieldName": "Columna", "title": "Columna"},
                   {"fieldName": "Comentario generado", "title": "Comentario generado"},
                   {"fieldName": "Status revision", "title": "Status"},
                   {"fieldName": "Comentarios revisor", "title": "Comentarios revisor"},
+                  {"fieldName": "Criterio fallido", "title": "Criterio fallido"},
+                  {"fieldName": "Detalles criterio fallido", "title": "Detalles criterio fallido"},
                   {"fieldName": "Fecha resultado", "title": "Fecha", "type": "datetime"},
                   {"fieldName": "Estado ejecucion", "title": "Estado ejecucion"}
                 ]

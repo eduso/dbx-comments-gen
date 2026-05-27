@@ -73,6 +73,8 @@ spark.sql(
             COMMENT 'Referencia a la ejecución que generó este resultado',
         fecha_resultado TIMESTAMP
             COMMENT 'Fecha y hora en que se generó el comentario',
+        nombre_catalogo VARCHAR(255)
+            COMMENT 'Nombre del catálogo al que pertenece la tabla',
         nombre_esquema  VARCHAR(255)
             COMMENT 'Nombre del esquema al que pertenece la tabla',
         nombre_tabla    VARCHAR(255)
@@ -85,6 +87,10 @@ spark.sql(
             COMMENT 'Estado de revisión: por revisar, aprobado, rechazado',
         user_comments   VARCHAR(4000)
             COMMENT 'Comentarios del revisor (vacío por defecto)',
+        criterio_fallido         STRING
+            COMMENT 'Identificador del criterio de calidad fallido (NULL si OK)',
+        detalles_criterio_fallido STRING
+            COMMENT 'Detalles del criterio fallido (NULL si OK)',
         CONSTRAINT pk_resultados PRIMARY KEY (id_resultado),
         CONSTRAINT fk_ejecucion FOREIGN KEY (id_ejecucion)
             REFERENCES

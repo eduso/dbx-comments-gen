@@ -63,6 +63,7 @@ ENV/
 input/*
 !input/.gitkeep
 !input/mapping.md
+!input/audit_mapping.md
 
 # ── Secretos / credenciales ────────────────────────────────────────────────
 .env

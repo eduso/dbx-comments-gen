@@ -1,11 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Generador de Comentarios v5
+# MAGIC # Generador de Comentarios v6
 # MAGIC ## Documentación automática de esquemas, tablas y columnas con IA
 # MAGIC
 # MAGIC Genera comentarios de negocio en español para cada **esquema**, **tabla**
-# MAGIC y **columna** de un catálogo de Unity Catalog, usando un modelo
-# MAGIC fundacional vía Foundation Model API.
+# MAGIC y **columna** listada en una **tabla de scope** de Unity Catalog,
+# MAGIC usando un modelo fundacional vía Foundation Model API.
+# MAGIC
+# MAGIC ### Fuente del scope
+# MAGIC
+# MAGIC La lista de objetos a documentar se lee de una **tabla de control**
+# MAGIC (parámetro `scope_table`) que debe contener tres columnas
+# MAGIC configurables con el nombre del catálogo, esquema y tabla a procesar
+# MAGIC (`scope_catalog_column`, `scope_schema_column`, `scope_table_column`).
+# MAGIC Cada combinación distinta (catálogo, esquema, tabla) se procesa una
+# MAGIC vez; los esquemas se comentan una sola vez aunque aparezcan varias
+# MAGIC veces en la tabla de scope.
 # MAGIC
 # MAGIC ### Insumos de contexto
 # MAGIC
@@ -36,8 +46,22 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog_name", "", "Catálogo a procesar")
-dbutils.widgets.text("schema_name", "", "Esquema (vacío = todo el catálogo)")
+dbutils.widgets.text(
+    "scope_table", "",
+    "Tabla de scope (catalogo.esquema.tabla)",
+)
+dbutils.widgets.text(
+    "scope_catalog_column", "",
+    "Columna con el catálogo",
+)
+dbutils.widgets.text(
+    "scope_schema_column", "",
+    "Columna con el esquema",
+)
+dbutils.widgets.text(
+    "scope_table_column", "",
+    "Columna con la tabla",
+)
 dbutils.widgets.text(
     "model_endpoint",
     "databricks-claude-sonnet-4-5",
@@ -50,8 +74,10 @@ dbutils.widgets.dropdown(
 )
 dbutils.widgets.text("sampling_pct", "", "Porcentaje de sampling (1-100)")
 
-CATALOG_NAME = dbutils.widgets.get("catalog_name").strip()
-SCHEMA_NAME = dbutils.widgets.get("schema_name").strip()
+SCOPE_TABLE = dbutils.widgets.get("scope_table").strip()
+SCOPE_CATALOG_COLUMN = dbutils.widgets.get("scope_catalog_column").strip()
+SCOPE_SCHEMA_COLUMN = dbutils.widgets.get("scope_schema_column").strip()
+SCOPE_TABLE_COLUMN = dbutils.widgets.get("scope_table_column").strip()
 MODEL_ENDPOINT = dbutils.widgets.get("model_endpoint").strip()
 RESULTS_CATALOG = dbutils.widgets.get("results_catalog").strip()
 RESULTS_SCHEMA = dbutils.widgets.get("results_schema").strip()
@@ -60,7 +86,10 @@ ENABLE_SAMPLING = (
 )
 
 _required = {
-    "catalog_name": CATALOG_NAME,
+    "scope_table": SCOPE_TABLE,
+    "scope_catalog_column": SCOPE_CATALOG_COLUMN,
+    "scope_schema_column": SCOPE_SCHEMA_COLUMN,
+    "scope_table_column": SCOPE_TABLE_COLUMN,
     "model_endpoint": MODEL_ENDPOINT,
     "results_catalog": RESULTS_CATALOG,
     "results_schema": RESULTS_SCHEMA,
@@ -69,6 +98,11 @@ _missing = [k for k, v in _required.items() if not v]
 if _missing:
     raise ValueError(
         f"Parámetros obligatorios sin valor: {', '.join(_missing)}"
+    )
+
+if SCOPE_TABLE.count(".") != 2:
+    raise ValueError(
+        "'scope_table' debe tener formato 'catalogo.esquema.tabla'."
     )
 
 if ENABLE_SAMPLING:
@@ -86,8 +120,10 @@ else:
 print("=" * 60)
 print("PARÁMETROS DE EJECUCIÓN")
 print("=" * 60)
-print(f"  Catálogo a procesar : {CATALOG_NAME}")
-print(f"  Esquema             : {SCHEMA_NAME or '(todos los esquemas)'}")
+print(f"  Tabla scope         : {SCOPE_TABLE}")
+print(f"  Columna catálogo    : {SCOPE_CATALOG_COLUMN}")
+print(f"  Columna esquema     : {SCOPE_SCHEMA_COLUMN}")
+print(f"  Columna tabla       : {SCOPE_TABLE_COLUMN}")
 print(f"  Modelo              : {MODEL_ENDPOINT}")
 print(f"  Resultados en       : {RESULTS_CATALOG}.{RESULTS_SCHEMA}")
 print(f"  Sampling habilitado : {ENABLE_SAMPLING}")
@@ -192,6 +228,7 @@ def update_ejecucion(
 
 def insert_resultado(
     exec_id: str,
+    nombre_catalogo: str,
     nombre_esquema: str,
     nombre_tabla: str,
     nombre_columna: str,
@@ -201,14 +238,17 @@ def insert_resultado(
     spark.sql(
         f"""
         INSERT INTO {_RESULTS_TABLE_SQL}
-            (id_ejecucion, fecha_resultado, nombre_esquema,
-             nombre_tabla, nombre_columna, comentario,
-             status, user_comments)
+            (id_ejecucion, fecha_resultado, nombre_catalogo,
+             nombre_esquema, nombre_tabla, nombre_columna, comentario,
+             status, user_comments,
+             criterio_fallido, detalles_criterio_fallido)
         VALUES (
             '{exec_id}', TIMESTAMP '{_now()}',
+            '{_esc(nombre_catalogo)}',
             '{_esc(nombre_esquema)}', '{_esc(nombre_tabla)}',
             '{_esc(nombre_columna)}', '{_esc(comentario)}',
-            'aprobado', NULL
+            'aprobado', NULL,
+            NULL, NULL
         )
         """
     )
@@ -808,44 +848,95 @@ def generate_column_comment(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Descubrimiento de esquemas y tablas
+# MAGIC ## 8. Descubrimiento desde la tabla de scope
+# MAGIC
+# MAGIC Lee la tabla configurada en `scope_table` y agrupa las filas en una
+# MAGIC estructura `catalogo → esquema → tablas`. Luego enriquece cada
+# MAGIC esquema/tabla con su `comment` y la lista de columnas leídas desde
+# MAGIC `information_schema` del catálogo correspondiente.
 
 # COMMAND ----------
 
-logger.info("ETAPA: Descubrimiento de esquemas y tablas")
+logger.info("ETAPA: Descubrimiento desde tabla de scope")
 
 
-def discover_schemas(catalog: str, schema_filter: str = "") -> list:
-    """Descubre los esquemas a procesar en el catálogo."""
-    if schema_filter:
+def load_scope_targets(
+    scope_table: str,
+    catalog_column: str,
+    schema_column: str,
+    table_column: str,
+) -> dict:
+    """Lee la tabla de scope y devuelve {catalog: {schema: [tablas]}}.
+
+    Las filas con valores nulos o vacíos en cualquier columna se omiten.
+    """
+    qualified = _qualify(scope_table)
+    rows = spark.sql(
+        f"""
+        SELECT DISTINCT
+            `{catalog_column}` AS catalog_name,
+            `{schema_column}`  AS schema_name,
+            `{table_column}`   AS table_name
+        FROM {qualified}
+        WHERE `{catalog_column}` IS NOT NULL
+          AND `{schema_column}`  IS NOT NULL
+          AND `{table_column}`   IS NOT NULL
+        ORDER BY catalog_name, schema_name, table_name
+        """
+    ).collect()
+
+    targets: dict = {}
+    for row in rows:
+        cat = (row["catalog_name"] or "").strip()
+        sch = (row["schema_name"] or "").strip()
+        tbl = (row["table_name"] or "").strip()
+        if not cat or not sch or not tbl:
+            continue
+        targets.setdefault(cat, {}).setdefault(sch, []).append(tbl)
+
+    n_tables = sum(
+        len(tables)
+        for schemas in targets.values()
+        for tables in schemas.values()
+    )
+    n_schemas = sum(len(schemas) for schemas in targets.values())
+    logger.info(
+        f"  Scope: {len(targets)} catálogo(s), "
+        f"{n_schemas} esquema(s), {n_tables} tabla(s)"
+    )
+    return targets
+
+
+def get_schema_comment(catalog: str, schema: str) -> str:
+    """Lee el comentario actual del esquema desde information_schema."""
+    try:
         rows = spark.sql(
             f"""
-            SELECT schema_name, comment
+            SELECT comment
             FROM `{catalog}`.information_schema.schemata
             WHERE catalog_name = '{catalog}'
-              AND schema_name = '{schema_filter}'
+              AND schema_name  = '{schema}'
             """
         ).collect()
-    else:
-        rows = spark.sql(
-            f"""
-            SELECT schema_name, comment
-            FROM `{catalog}`.information_schema.schemata
-            WHERE catalog_name = '{catalog}'
-              AND schema_name NOT IN ('information_schema', 'default')
-            """
-        ).collect()
-
-    schemas = [
-        {"name": r["schema_name"], "comment": r["comment"] or ""}
-        for r in rows
-    ]
-    logger.info(f"  Esquemas encontrados: {len(schemas)}")
-    return schemas
+        if not rows:
+            return ""
+        return rows[0]["comment"] or ""
+    except Exception as exc:
+        logger.warning(
+            f"  ⚠ No se pudo leer comentario del esquema "
+            f"{catalog}.{schema}: {str(exc)[:120]}"
+        )
+        return ""
 
 
-def discover_tables_and_columns(catalog: str, schema: str) -> dict:
-    """Descubre todas las tablas y columnas de un esquema."""
+def discover_columns_for_tables(
+    catalog: str, schema: str, table_names: list
+) -> dict:
+    """Descubre las columnas de un subconjunto de tablas de un esquema."""
+    if not table_names:
+        return {}
+
+    in_list = ", ".join(f"'{_esc(t)}'" for t in table_names)
     rows = spark.sql(
         f"""
         SELECT
@@ -861,6 +952,7 @@ def discover_tables_and_columns(catalog: str, schema: str) -> dict:
             AND c.table_name    = t.table_name
         WHERE c.table_catalog = '{catalog}'
           AND c.table_schema  = '{schema}'
+          AND c.table_name IN ({in_list})
         ORDER BY c.table_name, c.ordinal_position
         """
     ).collect()
@@ -877,20 +969,34 @@ def discover_tables_and_columns(catalog: str, schema: str) -> dict:
             {"name": row["column_name"], "type": row["data_type"]}
         )
 
+    found = set(tables.keys())
+    missing = [t for t in table_names if t not in found]
+    for t in missing:
+        logger.warning(
+            f"    ⚠ Tabla no accesible: `{catalog}`.`{schema}`.`{t}` — "
+            "se omitirá"
+        )
+
     total_cols = sum(len(t["columns"]) for t in tables.values())
     logger.info(
-        f"    Tablas en {schema}: {len(tables)}, "
-        f"Columnas: {total_cols}"
+        f"    {catalog}.{schema}: {len(tables)} tabla(s), "
+        f"{total_cols} columna(s)"
     )
     return tables
 
 
-schemas_to_process = discover_schemas(CATALOG_NAME, SCHEMA_NAME)
+scope_targets = load_scope_targets(
+    SCOPE_TABLE,
+    SCOPE_CATALOG_COLUMN,
+    SCOPE_SCHEMA_COLUMN,
+    SCOPE_TABLE_COLUMN,
+)
 
-if not schemas_to_process:
+if not scope_targets:
     msg = (
-        f"No se encontraron esquemas en {CATALOG_NAME}"
-        + (f" con filtro '{SCHEMA_NAME}'" if SCHEMA_NAME else "")
+        f"La tabla de scope '{SCOPE_TABLE}' no contiene filas válidas "
+        f"con las columnas '{SCOPE_CATALOG_COLUMN}', "
+        f"'{SCOPE_SCHEMA_COLUMN}', '{SCOPE_TABLE_COLUMN}'."
     )
     logger.error(msg)
     raise ValueError(msg)
@@ -905,13 +1011,21 @@ if not schemas_to_process:
 exec_id = str(uuid.uuid4())
 SEP = "=" * 60
 
+total_scope_schemas = sum(len(s) for s in scope_targets.values())
+total_scope_tables = sum(
+    len(tables)
+    for schemas in scope_targets.values()
+    for tables in schemas.values()
+)
+
 logger.info(SEP)
 logger.info("EJECUCIÓN INICIADA")
 logger.info(f"  ID        : {exec_id}")
 logger.info(f"  Timestamp : {_now()} UTC")
 logger.info(
-    f"  Alcance   : {CATALOG_NAME}"
-    + (f".{SCHEMA_NAME}" if SCHEMA_NAME else " (todos los esquemas)")
+    f"  Alcance   : {len(scope_targets)} catálogo(s), "
+    f"{total_scope_schemas} esquema(s), "
+    f"{total_scope_tables} tabla(s) — desde {SCOPE_TABLE}"
 )
 logger.info(f"  Modelo    : {MODEL_ENDPOINT}")
 logger.info(
@@ -926,154 +1040,180 @@ try:
     total_tables_ok = 0
     total_columns_ok = 0
     errors: list = []
+    processed_schemas: set = set()
 
-    for schema_info in schemas_to_process:
-        current_schema = schema_info["name"]
-        current_schema_comment = schema_info["comment"]
+    for current_catalog, schemas_map in scope_targets.items():
+        for current_schema, requested_tables in schemas_map.items():
+            schema_key = (current_catalog, current_schema)
 
-        logger.info(f"\n{'─' * 50}")
-        logger.info(f"ETAPA: Procesando esquema '{current_schema}'")
-        logger.info(f"{'─' * 50}")
-
-        schema_context = build_dynamic_context(
-            INSUMOS, schema_name=current_schema
-        )
-
-        tables = discover_tables_and_columns(CATALOG_NAME, current_schema)
-
-        if not tables:
-            logger.warning(
-                f"  Sin tablas en {current_schema} — saltando"
-            )
-            continue
-
-        table_names = list(tables.keys())
-
-        update_ejecucion(
-            exec_id,
-            "EN_PROCESO",
-            f"Procesando esquema '{current_schema}' — "
-            f"{len(tables)} tabla(s)",
-        )
-
-        try:
-            generated_schema_comment = generate_schema_comment(
-                schema_name=current_schema,
-                tables_in_schema=table_names,
-                context=schema_context,
-            )
-            insert_resultado(
-                exec_id,
-                current_schema,
-                "__esquema__",
-                "__esquema__",
-                generated_schema_comment,
-            )
-            total_schemas_ok += 1
+            logger.info(f"\n{'─' * 50}")
             logger.info(
-                f"  ✓ [ESQUEMA] {current_schema}: "
-                f"{generated_schema_comment[:100]}..."
+                f"ETAPA: Procesando esquema "
+                f"'{current_catalog}.{current_schema}'"
             )
-            if not current_schema_comment:
-                current_schema_comment = generated_schema_comment
-        except Exception as exc:
-            errors.append(
-                f"{current_schema} [esquema]: {str(exc)[:200]}"
-            )
-            logger.error(f"  ✗ Error en comentario de esquema: {exc}")
+            logger.info(f"{'─' * 50}")
 
-        for table_name, table_data in tables.items():
-            n_cols = len(table_data["columns"])
-            logger.info(
-                f"\n  TABLA: '{current_schema}.{table_name}' "
-                f"({n_cols} columnas)"
+            schema_context = build_dynamic_context(
+                INSUMOS, schema_name=current_schema
             )
+
+            tables = discover_columns_for_tables(
+                current_catalog, current_schema, requested_tables
+            )
+
+            if not tables:
+                logger.warning(
+                    f"  Sin tablas accesibles en "
+                    f"{current_catalog}.{current_schema} — saltando"
+                )
+                continue
+
+            table_names = list(tables.keys())
 
             update_ejecucion(
                 exec_id,
                 "EN_PROCESO",
-                f"Procesando '{current_schema}.{table_name}' — "
-                f"{total_columns_ok} columnas completadas",
+                f"Procesando esquema "
+                f"'{current_catalog}.{current_schema}' — "
+                f"{len(tables)} tabla(s)",
             )
 
-            table_context = build_dynamic_context(
-                INSUMOS,
-                schema_name=current_schema,
-                table_name=table_name,
+            current_schema_comment = get_schema_comment(
+                current_catalog, current_schema
             )
 
-            sample_data = ""
-            if ENABLE_SAMPLING:
-                sample_data = get_table_sample(
-                    CATALOG_NAME,
-                    current_schema,
-                    table_name,
-                    SAMPLING_PCT,
-                )
-
-            generated_table_comment = ""
-            try:
-                generated_table_comment = generate_table_comment(
-                    schema_name=current_schema,
-                    schema_comment=current_schema_comment,
-                    table_name=table_name,
-                    context=table_context,
-                    sample_data=sample_data,
-                )
-                insert_resultado(
-                    exec_id,
-                    current_schema,
-                    table_name,
-                    "__tabla__",
-                    generated_table_comment,
-                )
-                total_tables_ok += 1
-                logger.info(
-                    f"    ✓ [TABLA] {table_name}: "
-                    f"{generated_table_comment[:100]}..."
-                )
-            except Exception as exc:
-                errors.append(
-                    f"{table_name} [tabla]: {str(exc)[:200]}"
-                )
-                logger.error(f"    ✗ Error en comentario de tabla: {exc}")
-                generated_table_comment = table_data["comment"]
-
-            context_for_columns = (
-                generated_table_comment or table_data["comment"]
-            )
-
-            for col in table_data["columns"]:
-                col_name = col["name"]
-                col_type = col["type"]
+            if schema_key not in processed_schemas:
                 try:
-                    comment = generate_column_comment(
+                    generated_schema_comment = generate_schema_comment(
+                        schema_name=current_schema,
+                        tables_in_schema=table_names,
+                        context=schema_context,
+                    )
+                    insert_resultado(
+                        exec_id,
+                        current_catalog,
+                        current_schema,
+                        "__esquema__",
+                        "__esquema__",
+                        generated_schema_comment,
+                    )
+                    total_schemas_ok += 1
+                    processed_schemas.add(schema_key)
+                    logger.info(
+                        f"  ✓ [ESQUEMA] {current_catalog}.{current_schema}: "
+                        f"{generated_schema_comment[:100]}..."
+                    )
+                    if not current_schema_comment:
+                        current_schema_comment = generated_schema_comment
+                except Exception as exc:
+                    errors.append(
+                        f"{current_catalog}.{current_schema} [esquema]: "
+                        f"{str(exc)[:200]}"
+                    )
+                    logger.error(
+                        f"  ✗ Error en comentario de esquema: {exc}"
+                    )
+
+            for table_name, table_data in tables.items():
+                n_cols = len(table_data["columns"])
+                logger.info(
+                    f"\n  TABLA: "
+                    f"'{current_catalog}.{current_schema}.{table_name}' "
+                    f"({n_cols} columnas)"
+                )
+
+                update_ejecucion(
+                    exec_id,
+                    "EN_PROCESO",
+                    f"Procesando "
+                    f"'{current_catalog}.{current_schema}.{table_name}' — "
+                    f"{total_columns_ok} columnas completadas",
+                )
+
+                table_context = build_dynamic_context(
+                    INSUMOS,
+                    schema_name=current_schema,
+                    table_name=table_name,
+                )
+
+                sample_data = ""
+                if ENABLE_SAMPLING:
+                    sample_data = get_table_sample(
+                        current_catalog,
+                        current_schema,
+                        table_name,
+                        SAMPLING_PCT,
+                    )
+
+                generated_table_comment = ""
+                try:
+                    generated_table_comment = generate_table_comment(
                         schema_name=current_schema,
                         schema_comment=current_schema_comment,
                         table_name=table_name,
-                        table_comment=context_for_columns,
-                        column_name=col_name,
-                        data_type=col_type,
                         context=table_context,
                         sample_data=sample_data,
                     )
                     insert_resultado(
                         exec_id,
+                        current_catalog,
                         current_schema,
                         table_name,
-                        col_name,
-                        comment,
+                        "__tabla__",
+                        generated_table_comment,
                     )
-                    total_columns_ok += 1
+                    total_tables_ok += 1
                     logger.info(
-                        f"      ✓ {col_name} ({col_type}): "
-                        f"{comment[:90]}..."
+                        f"    ✓ [TABLA] {table_name}: "
+                        f"{generated_table_comment[:100]}..."
                     )
                 except Exception as exc:
                     errors.append(
-                        f"{table_name}.{col_name}: {str(exc)[:200]}"
+                        f"{current_catalog}.{current_schema}.{table_name} "
+                        f"[tabla]: {str(exc)[:200]}"
                     )
-                    logger.error(f"      ✗ Error en {col_name}: {exc}")
+                    logger.error(
+                        f"    ✗ Error en comentario de tabla: {exc}"
+                    )
+                    generated_table_comment = table_data["comment"]
+
+                context_for_columns = (
+                    generated_table_comment or table_data["comment"]
+                )
+
+                for col in table_data["columns"]:
+                    col_name = col["name"]
+                    col_type = col["type"]
+                    try:
+                        comment = generate_column_comment(
+                            schema_name=current_schema,
+                            schema_comment=current_schema_comment,
+                            table_name=table_name,
+                            table_comment=context_for_columns,
+                            column_name=col_name,
+                            data_type=col_type,
+                            context=table_context,
+                            sample_data=sample_data,
+                        )
+                        insert_resultado(
+                            exec_id,
+                            current_catalog,
+                            current_schema,
+                            table_name,
+                            col_name,
+                            comment,
+                        )
+                        total_columns_ok += 1
+                        logger.info(
+                            f"      ✓ {col_name} ({col_type}): "
+                            f"{comment[:90]}..."
+                        )
+                    except Exception as exc:
+                        errors.append(
+                            f"{current_catalog}.{current_schema}."
+                            f"{table_name}.{col_name}: {str(exc)[:200]}"
+                        )
+                        logger.error(f"      ✗ Error en {col_name}: {exc}")
 
     logger.info(f"\n{SEP}")
     logger.info("ETAPA: Finalizando ejecución")
@@ -1083,8 +1223,9 @@ try:
         error_summary = "; ".join(errors[:5])
         resultado_final = (
             f"Completado con {len(errors)} error(es). "
-            f"Esquemas: {total_schemas_ok}/{len(schemas_to_process)}. "
-            f"Tablas: {total_tables_ok}. Columnas: {total_columns_ok}. "
+            f"Esquemas: {total_schemas_ok}/{total_scope_schemas}. "
+            f"Tablas: {total_tables_ok}/{total_scope_tables}. "
+            f"Columnas: {total_columns_ok}. "
             f"Errores: {error_summary}"
         )
     else:
@@ -1092,8 +1233,7 @@ try:
         resultado_final = (
             f"Exitoso. {total_schemas_ok} esquema(s), "
             f"{total_tables_ok} tabla(s) y {total_columns_ok} columna(s) "
-            f"documentadas en {CATALOG_NAME}"
-            + (f".{SCHEMA_NAME}" if SCHEMA_NAME else " (todos)")
+            f"documentadas desde scope '{SCOPE_TABLE}'."
         )
 
     update_ejecucion(exec_id, estado_final, resultado_final)
