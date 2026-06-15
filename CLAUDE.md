@@ -30,15 +30,23 @@ Este proyecto vive en tres lugares que deben mantenerse alineados:
 - **Defaults:** solo `model_endpoint` tiene default (`databricks-claude-sonnet-4-5`). El resto de parámetros son obligatorios.
 - **Estructura aplanada:** todos los notebooks y el dashboard viven en `src/` (sin subdirectorios). El DDL es autoritativo en `src/01_setup_schema.py`.
 
-## Pipeline
+## Pipelines
 
-Job único `comments_pipeline` con tres tareas encadenadas:
+El bundle define **tres jobs independientes**:
 
-```
-setup_schema → generate_comments → apply_comments
-```
+1. `comments_pipeline` — generación + aplicación, tres tareas encadenadas:
 
-`apply_comments` solo aplica registros con `status='aprobado'` (default al insertar).
+   ```
+   setup_schema → generate_comments → apply_comments
+   ```
+
+   `apply_comments` solo aplica registros con `status='aprobado'` (default al insertar).
+
+2. `comments_audit_pipeline` — auditoría independiente (`04_audit_comments.py`). Escribe veredicto en `criterio_fallido` / `detalles_criterio_fallido`; no toca `status`.
+
+3. `comments_eval_pipeline` — bake-off offline de modelos fundacionales (`05_eval_models.py`). Compara candidatos sobre el golden set, registra runs en MLflow y produce un scorecard. No genera ni aplica comentarios.
+
+Los criterios de `src/audit_criteria.py` son la **fuente única**: los usa tanto el auditor como el juez del bake-off.
 
 ## Comandos frecuentes
 

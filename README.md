@@ -2,7 +2,7 @@
 
 Generador automático de comentarios de negocio para esquemas, tablas y columnas de Unity Catalog usando Foundation Model API de Databricks.
 
-> **Estado:** v6 — scope desde tabla de control, soporte multi-catálogo y proceso de auditoría independiente.
+> **Estado:** v7 — scope desde tabla de control, multi-catálogo, auditoría independiente y bake-off de modelos fundacionales.
 
 ---
 
@@ -19,6 +19,7 @@ Generador automático de comentarios de negocio para esquemas, tablas y columnas
 - [Tablas de resultados](#tablas-de-resultados)
 - [Flujo de revisión](#flujo-de-revisión)
 - [Auditoría de comentarios](#auditoría-de-comentarios)
+- [Evaluación de modelos (bake-off)](#evaluación-de-modelos-bake-off)
 - [Dashboard](#dashboard)
 - [Desarrollo](#desarrollo)
 - [Roadmap](#roadmap)
@@ -35,12 +36,13 @@ Generador automático de comentarios de negocio para esquemas, tablas y columnas
 5. Persiste resultados en una tabla `resultados` con campos `status` y `user_comments` para flujo de revisión.
 6. Aplica al catálogo los comentarios con `status='aprobado'` (default) vía `COMMENT ON SCHEMA / TABLE` y `ALTER TABLE ... ALTER COLUMN`. Soporta múltiples catálogos en una sola corrida.
 7. (Opcional) Audita los comentarios generados contra los insumos provistos y un catálogo de criterios declarativo, escribiendo el veredicto en `criterio_fallido` y `detalles_criterio_fallido`.
+8. (Opcional) Evalúa modelos fundacionales candidatos mediante un **bake-off offline** sobre un golden set fijo, produciendo un scorecard ponderado para elegir el modelo con criterio objetivo.
 
 ---
 
 ## Pipelines
 
-El bundle define **dos jobs independientes**:
+El bundle define **tres jobs independientes**:
 
 ### `comments_pipeline` — generación + aplicación
 
@@ -52,7 +54,7 @@ El bundle define **dos jobs independientes**:
         │                        │                          │
         ▼                        ▼                          ▼
   ejecuciones /            scope_table              COMMENT ON / ALTER
-  resultados            + information_schema        sobre Unity Catalog
+  resultados            + DESCRIBE (metadata)       sobre Unity Catalog
                         + Foundation Model API
 ```
 
@@ -69,6 +71,17 @@ Por defecto todos los comentarios se insertan con `status='aprobado'`, así que 
 
 Independiente del job principal. No modifica `status` ni el contenido del comentario.
 
+### `comments_eval_pipeline` — bake-off de modelos
+
+```
+┌──────────────────┐
+│ eval_models      │  Compara modelos candidatos sobre un golden set
+│ (bake-off LLM)   │  fijo y registra cada uno como run de MLflow +
+└──────────────────┘  scorecard ponderado. Selección offline.
+```
+
+Proceso de **selección offline**: no genera ni aplica comentarios al catálogo. Ver [Evaluación de modelos](#evaluación-de-modelos-bake-off).
+
 ---
 
 ## Estructura del repositorio
@@ -84,10 +97,11 @@ dbx-comments-gen/
 │   ├── audit_mapping.md          # Insumos extra solo para auditoría
 │   └── (documentos del usuario)
 └── src/
-    ├── 01_setup_schema.py        # DDL: esquema + ejecuciones + resultados
+    ├── 01_setup_schema.py        # DDL: esquema + ejecuciones + resultados + golden set
     ├── 02_generate_comments.py   # Generador con IA (desde scope_table)
     ├── 03_apply_comments.py      # Aplicador multi-catálogo
     ├── 04_audit_comments.py      # Auditor independiente
+    ├── 05_eval_models.py         # Bake-off de modelos fundacionales
     ├── audit_criteria.py         # Catálogo declarativo de criterios
     └── dashboard.lvdash.json     # Dashboard Lakeview
 ```
@@ -102,6 +116,11 @@ dbx-comments-gen/
 - Workspace con permisos para crear catálogos, esquemas, jobs y dashboards.
 - Un SQL Warehouse disponible.
 - Una **tabla de scope** existente en Unity Catalog (ver [Tabla de scope](#tabla-de-scope)).
+
+> **Permisos de metadata:** la generación obtiene columnas y comentarios con
+> `DESCRIBE SCHEMA/TABLE EXTENDED`, **no** con `information_schema` ni
+> `system.*`. Basta con `USE CATALOG` + `USE SCHEMA` + `SELECT` sobre los
+> objetos del scope; no se requiere acceso a `information_schema`.
 
 ### 2. Configurar el bundle
 
@@ -241,6 +260,20 @@ Para validar el pipeline end-to-end con el menor costo posible:
 | `id_ejecucion` | ID de ejecución a auditar. Vacío = todas las filas | _(vacío)_ |
 | `audit_only_approved` | Auditar solo filas con `status='aprobado'` (`yes`/`no`) | `yes` |
 | `audit_model_endpoint` | Modelo a usar como auditor | `databricks-claude-sonnet-4-5` |
+
+### `comments_eval_pipeline`
+
+| Parámetro | Descripción | Default |
+|-----------|-------------|---------|
+| `candidate_models` | Modelos candidatos a comparar (separados por coma) | _(obligatorio)_ |
+| `judge_model` | Modelo juez neutral (no puede ser candidato) | `databricks-claude-opus-4-1` |
+| `results_catalog` | Catálogo de resultados (para resolver el golden set por defecto) | _(obligatorio)_ |
+| `results_schema` | Esquema de resultados | _(obligatorio)_ |
+| `golden_table` | Tabla del golden set. Vacío = `<results>.golden_set_comentarios` | _(vacío)_ |
+| `experiment_path` | Ruta del experimento MLflow | `/Shared/eval-comentarios-fundacionales` |
+| `gen_temperature` | Temperatura de generación (0.0 recomendado para comparación justa) | `0.0` |
+| `n_consistency_runs` | Corridas por input para medir consistencia | `3` |
+| `max_comment_chars` | Máximo de caracteres por comentario | `500` |
 
 ---
 
@@ -443,6 +476,60 @@ Si la auditoría se lanza directamente después de `generate_comments` (encadena
 
 ---
 
+## Evaluación de modelos (bake-off)
+
+A partir de v7 existe un proceso independiente (`05_eval_models.py`, expuesto como job `comments_eval_pipeline`) para **elegir el modelo fundacional** del generador con criterio objetivo, en vez de por intuición.
+
+El principio es un **bake-off offline reproducible**: todos los modelos candidatos corren sobre el **mismo golden set fijo**, con el **mismo prompt, contexto y temperatura**. Solo cambia el modelo, así el resultado aísla esa variable. Es un proceso de **selección** — no genera ni aplica comentarios al catálogo.
+
+> Trasfondo conceptual completo en `nota-fiabilidad-modelos-fundacionales.md` y la plantilla anotada en `notebook-eval-harness-comentarios.md`.
+
+### Cómo mide la fiabilidad
+
+| Dimensión | Cómo se mide |
+|-----------|--------------|
+| **Calidad** (grounding, terminología, granularidad, completitud, idioma/estilo) | Juez LLM neutral que **reutiliza los criterios de `src/audit_criteria.py`** (los mismos del auditor). |
+| **Idioma / longitud / PII** | Scorers determinísticos (regex, conteo) — gratis, sin tokens. |
+| **Consistencia** | Varianza entre `n_consistency_runs` corridas del mismo input. |
+| **Costo** | Tokens × tarifa por modelo (`PRICE_PER_1M` en el notebook). |
+| **Latencia** | Tiempo de respuesta medio por llamada. |
+
+Cada modelo candidato se registra como un **run de MLflow** sobre el mismo experimento (`experiment_path`), comparables en el Evaluation UI. El notebook produce un **scorecard ponderado** (`WEIGHTS` en el notebook — los pesos los define la organización).
+
+### Barandas para una comparación justa
+
+- **Juez neutral y fijo**: el modelo juez (`judge_model`, default `databricks-claude-opus-4-1`) **no puede ser uno de los candidatos** — el notebook lo valida y falla si lo es.
+- **Todo fijo excepto el modelo**: mismo prompt, contexto, temperatura (`0.0` recomendado) y golden set.
+- **Calibración humana** antes de confiar en el juez a escala: revisar una muestra (~30 ítems) y medir el acuerdo juez ↔ experto.
+
+### El golden set
+
+Set de prueba curado, una fila por objeto a comentar. La tabla `golden_set_comentarios` se crea (vacía) en `01_setup_schema.py` dentro del esquema de resultados; un experto la cura antes de evaluar. Estructura:
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `object_id` | STRING (PK) | Identificador único del objeto (`catalogo.esquema.tabla.columna`). |
+| `object_level` | VARCHAR | `schema` \| `table` \| `column`. |
+| `context_text` | STRING | Contexto provisto al generador (insumos + metadata). |
+| `gold_comment` | STRING | Comentario de referencia aprobado (NULL si aún no existe). |
+| `domain` | VARCHAR | Dominio de negocio, para estratificar. |
+| `is_sensitive` | BOOLEAN | Marca objetos con datos sensibles (PII). |
+
+Por defecto el notebook usa `<results_catalog>.<results_schema>.golden_set_comentarios`; se puede apuntar a otra tabla con `golden_table`.
+
+### Ejecución
+
+```bash
+databricks bundle run comments_eval_pipeline --target dev --profile <profile> \
+  --params results_catalog=mi_resultados,results_schema=ai_comments,\
+candidate_models="databricks-claude-sonnet-4-5,databricks-meta-llama-3-3-70b-instruct,databricks-gpt-oss-120b",\
+judge_model=databricks-claude-opus-4-1
+```
+
+El run con mayor `score_final` es el candidato recomendado, **sujeto a validación humana**.
+
+---
+
 ## Dashboard
 
 Recurso DAB: `comments_dashboard` (archivo `src/dashboard.lvdash.json`).
@@ -487,7 +574,9 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 |--------------------|----------|
 | Prompt enviado al modelo generador | `02_generate_comments.py` → `generate_*_comment` |
 | Prompt del auditor | `04_audit_comments.py` → `audit_row` |
-| Catálogo de criterios | `audit_criteria.py` → `AUDIT_CRITERIA` |
+| Catálogo de criterios (auditor **y** juez del bake-off) | `audit_criteria.py` → `AUDIT_CRITERIA` |
+| Modelos candidatos / juez del bake-off | `databricks.yml` (`candidate_models`, `judge_model`) |
+| Pesos del scorecard / tarifas de costo | `05_eval_models.py` → `WEIGHTS` / `PRICE_PER_1M` |
 | Scoring de relevancia | `02_generate_comments.py` → `_score_relevance` |
 | Límite de contexto | `02_generate_comments.py` / `04_audit_comments.py` → `MAX_CONTEXT_CHARS` |
 | Reglas de sampling | `02_generate_comments.py` → `get_table_sample` |
@@ -506,6 +595,7 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 
 ## Roadmap
 
+- [x] **Bake-off de modelos** — comparación offline de candidatos sobre golden set (`05_eval_models.py`). _(v7)_
 - [ ] **Modo dry-run** — generar prompts sin invocar al modelo (debug).
 - [ ] **Reintentos** con backoff exponencial cuando el endpoint falla.
 - [ ] **Paralelismo** en generación de columnas dentro de una tabla.
@@ -516,6 +606,13 @@ Al abrir el dashboard por primera vez, hay que seleccionar `results_catalog` y `
 ---
 
 ## Release notes
+
+### v7 (en curso)
+
+- **Bake-off de modelos fundacionales** (`05_eval_models.py` + job `comments_eval_pipeline`): evaluación offline reproducible que compara modelos candidatos sobre un golden set fijo y produce un scorecard ponderado, registrando cada candidato como run de MLflow.
+- **Juez del bake-off reutiliza `audit_criteria.py`**: las dimensiones de calidad se derivan de los mismos criterios del auditor (fuente única de verdad); el juez es un modelo neutral distinto a los candidatos.
+- **Nueva tabla de control `golden_set_comentarios`** creada por `01_setup_schema.py` (vacía; la cura un experto).
+- **Documentación de enfoque**: `nota-fiabilidad-modelos-fundacionales.md` (nota de campo) y `notebook-eval-harness-comentarios.md` (plantilla anotada).
 
 ### v6 (en curso)
 

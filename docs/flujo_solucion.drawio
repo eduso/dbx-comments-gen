@@ -1,11 +1,11 @@
-<mxGraphModel dx="1422" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1760" pageHeight="1000" math="0" shadow="0">
+<mxGraphModel dx="1422" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1760" pageHeight="1200" math="0" shadow="0">
   <root>
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>
-    <mxCell id="title_101" value="dbx-comments-gen — Flujo de la solución (v6)" style="text;html=1;align=left;verticalAlign=bottom;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=18;fontColor=#1A237E;fontStyle=1;" vertex="1" parent="1">
+    <mxCell id="title_101" value="dbx-comments-gen — Flujo de la solución (v7)" style="text;html=1;align=left;verticalAlign=bottom;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=18;fontColor=#1A237E;fontStyle=1;" vertex="1" parent="1">
       <mxGeometry x="30" y="15" width="1700" height="28" as="geometry"/>
     </mxCell>
-    <mxCell id="sub_102" value="Generación, aplicación y auditoría de comentarios de Unity Catalog con Foundation Model API" style="text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#78909C;fontStyle=2;" vertex="1" parent="1">
+    <mxCell id="sub_102" value="Generación, aplicación, auditoría y evaluación (bake-off) de modelos sobre comentarios de Unity Catalog con Foundation Model API" style="text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#78909C;fontStyle=2;" vertex="1" parent="1">
       <mxGeometry x="30" y="45" width="1700" height="18" as="geometry"/>
     </mxCell>
     <mxCell id="c_103" value="Insumos de entrada" style="swimlane;html=1;startSize=32;fillColor=#FAFAFA;strokeColor=#90A4AE;strokeWidth=2;fontStyle=1;fontSize=14;fontFamily=Inter,Helvetica,Arial;fontColor=#37474F;rounded=1;arcSize=8;swimlaneLine=0;shadow=0;" vertex="1" parent="1">
@@ -79,7 +79,7 @@
     </mxCell>
     <mxCell id="123" value="generate_comments
 02_generate_comments.py
-(scoring + LLM + persiste)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=1.5;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#212121;shadow=0;verticalAlign=bottom;spacingBottom=6;spacingTop=0;spacingLeft=4;spacingRight=4;" vertex="1" parent="c_120">
+(metadata: DESCRIBE · scoring · LLM)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=1.5;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#212121;shadow=0;verticalAlign=bottom;spacingBottom=6;spacingTop=0;spacingLeft=4;spacingRight=4;" vertex="1" parent="c_120">
       <mxGeometry x="290" y="60" width="240" height="110" as="geometry"/>
     </mxCell>
     <mxCell id="i_124" value="" style="shape=image;aspect=fixed;image=data:image/svg+xml,%3Csvg%20width%3D%22150%22%20height%3D%22150%22%20viewBox%3D%220%200%20150%20150%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Cpath%20d%3D%22M122%2028.8202C122%2023.0802%20117.35%2018.4302%20111.61%2018.4302H31.15V34.0202H22.9199%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M22.9199%20115.98H31.15V131.57H111.61C117.35%20131.57%20122%20126.92%20122%20121.18%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M22.9199%2047.46H31.15V102.54H22.9199%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M22.9199%2034.0202H31.15V18.4302H111.61C117.35%2018.4302%20122%2023.0802%20122%2028.8202V75.0002H107.13%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M22.9199%20115.98H31.15V131.57H111.61C117.35%20131.57%20122%20126.92%20122%20121.18V85.4399%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M63.3501%2075H88.1001%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M49.4798%2083.4602C46.4198%2081.8802%2044.3198%2078.6802%2044.3198%2075.0002C44.3198%2069.7502%2048.5798%2065.4902%2053.8298%2065.4902C59.0798%2065.4902%2063.3398%2069.7502%2063.3398%2075.0002C63.3398%2078.5202%2061.4298%2081.6002%2058.5798%2083.2402L70.9498%2099.0402C68.1098%20100.69%2066.1898%20103.76%2066.1898%20107.28C66.1898%20112.53%2070.4498%20116.79%2075.6998%20116.79C80.9498%20116.79%2085.2098%20112.53%2085.2098%20107.28C85.2098%20103.76%2083.2998%20100.68%2080.4498%2099.0402L92.8198%2083.2302%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3Cpath%20d%3D%22M101.97%2066.54C105.03%2068.12%20107.13%2071.32%20107.13%2075C107.13%2080.25%20102.87%2084.51%2097.6199%2084.51C92.3699%2084.51%2088.1099%2080.25%2088.1099%2075C88.1099%2071.48%2090.0199%2068.4%2092.8699%2066.76L80.4999%2050.96C83.3399%2049.31%2085.2599%2046.24%2085.2599%2042.72C85.2599%2037.47%2080.9999%2033.21%2075.7499%2033.21C70.4999%2033.21%2066.2399%2037.47%2066.2399%2042.72C66.2399%2046.24%2068.1499%2049.32%2070.9999%2050.96L58.6299%2066.77%22%20stroke%3D%22%23FF5F46%22%20stroke-width%3D%223%22%20stroke-miterlimit%3D%223%22%20stroke-linecap%3D%22square%22%2F%3E%0A%3C%2Fsvg%3E%0A" vertex="1" parent="123">
@@ -237,7 +237,7 @@ Solo escribe criterio_fallido / detalles_criterio_fallido en la tabla resultados
       <mxGeometry x="1170" y="510" width="560" height="70" as="geometry"/>
     </mxCell>
     <mxCell id="leg_165" value="Leyenda" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#CFD8DC;strokeWidth=1.5;shadow=0;arcSize=8;verticalAlign=top;fontFamily=Inter,Helvetica,Arial;fontSize=12;fontStyle=1;fontColor=#263238;spacingTop=6;" vertex="1" parent="1">
-      <mxGeometry x="1170" y="600" width="190" height="190" as="geometry"/>
+      <mxGeometry x="1170" y="600" width="190" height="225" as="geometry"/>
     </mxCell>
     <mxCell id="ll_166" value="" style="endArrow=classic;endFill=1;html=1;strokeColor=#1565C0;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="leg_165">
       <mxGeometry x="8" y="41" width="22" height="1" relative="1" as="geometry"/>
@@ -274,6 +274,51 @@ Solo escribe criterio_fallido / detalles_criterio_fallido en la tabla resultados
     </mxCell>
     <mxCell id="lt_177" value="Carga de insumos / DDL" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#37474F;" vertex="1" parent="leg_165">
       <mxGeometry x="36" y="154" width="145" height="18" as="geometry"/>
+    </mxCell>
+    <mxCell id="ll_178" value="" style="endArrow=classic;endFill=1;html=1;strokeColor=#00838F;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="leg_165">
+      <mxGeometry x="8" y="185" width="22" height="1" relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="lt_178" value="Flujo de bake-off" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#37474F;" vertex="1" parent="leg_165">
+      <mxGeometry x="36" y="178" width="145" height="18" as="geometry"/>
+    </mxCell>
+    <mxCell id="t_180" value="— Solo para bake-off —" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=9;fontColor=#00838F;fontStyle=2;" vertex="1" parent="c_103">
+      <mxGeometry x="20" y="662" width="220" height="18" as="geometry"/>
+    </mxCell>
+    <mxCell id="180" value="golden_set_comentarios&#10;(UC · creada por setup, curada por experto)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#E0F2F1;strokeColor=#00838F;strokeWidth=1.5;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#212121;shadow=0;verticalAlign=bottom;spacingBottom=6;spacingTop=0;spacingLeft=4;spacingRight=4;" vertex="1" parent="c_103">
+      <mxGeometry x="20" y="682" width="220" height="86" as="geometry"/>
+    </mxCell>
+    <mxCell id="c_181" value="Job: comments_eval_pipeline (bake-off · independiente)" style="swimlane;html=1;startSize=32;fillColor=#E0F7FA;strokeColor=#00838F;strokeWidth=2;fontStyle=1;fontSize=14;fontFamily=Inter,Helvetica,Arial;fontColor=#006064;rounded=1;arcSize=8;swimlaneLine=0;shadow=0;dashed=1;dashPattern=8 4;" vertex="1" parent="1">
+      <mxGeometry x="320" y="910" width="820" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="182" value="eval_models&#10;05_eval_models.py&#10;(candidatos vs juez neutral · scorecard)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2EBF2;strokeColor=#00838F;strokeWidth=1.5;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#212121;shadow=0;verticalAlign=bottom;spacingBottom=6;spacingTop=0;spacingLeft=4;spacingRight=4;" vertex="1" parent="c_181">
+      <mxGeometry x="290" y="75" width="240" height="120" as="geometry"/>
+    </mxCell>
+    <mxCell id="i_182" value="" style="shape=image;aspect=fixed;image=data:image/svg+xml,%3Csvg%20fill%3D%22%233776AB%22%20role%3D%22img%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EPython%3C%2Ftitle%3E%3Cpath%20d%3D%22M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26.02.2-.01.13V8.5l-.05.63-.13.55-.21.46-.26.38-.3.31-.33.25-.35.19-.35.14-.33.1-.3.07-.26.04-.21.02H8.77l-.69.05-.59.14-.5.22-.41.27-.33.32-.27.35-.2.36-.15.37-.1.35-.07.32-.04.27-.02.21v3.06H3.17l-.21-.03-.28-.07-.32-.12-.35-.18-.36-.26-.36-.36-.35-.46-.32-.59-.28-.73-.21-.88-.14-1.05-.05-1.23.06-1.22.16-1.04.24-.87.32-.71.36-.57.4-.44.42-.33.42-.24.4-.16.36-.1.32-.05.24-.01h.16l.06.01h8.16v-.83H6.18l-.01-2.75-.02-.37.05-.34.11-.31.17-.28.25-.26.31-.23.38-.2.44-.18.51-.15.58-.12.64-.1.71-.06.77-.04.84-.02%201.27.05zm-6.3%201.98l-.23.33-.08.41.08.41.23.34.33.22.41.09.41-.09.33-.22.23-.34.08-.41-.08-.41-.23-.33-.33-.22-.41-.09-.41.09zm13.09%203.95l.28.06.32.12.35.18.36.27.36.35.35.47.32.59.28.73.21.88.14%201.04.05%201.23-.06%201.23-.16%201.04-.24.86-.32.71-.36.57-.4.45-.42.33-.42.24-.4.16-.36.09-.32.05-.24.02-.16-.01h-8.22v.82h5.84l.01%202.76.02.36-.05.34-.11.31-.17.29-.25.25-.31.24-.38.2-.44.17-.51.15-.58.13-.64.09-.71.07-.77.04-.84.01-1.27-.04-1.07-.14-.9-.2-.73-.25-.59-.3-.45-.33-.34-.34-.25-.34-.16-.33-.1-.3-.04-.25-.02-.2.01-.13v-5.34l.05-.64.13-.54.21-.46.26-.38.3-.32.33-.24.35-.2.35-.14.33-.1.3-.06.26-.04.21-.02.13-.01h5.84l.69-.05.59-.14.5-.21.41-.28.33-.32.27-.35.2-.36.15-.36.1-.35.07-.32.04-.28.02-.21V6.07h2.09l.14.01zm-6.47%2014.25l-.23.33-.08.41.08.41.23.33.33.23.41.08.41-.08.33-.23.23-.33.08-.41-.08-.41-.23-.33-.33-.23-.41-.08-.41.08z%22%2F%3E%3C%2Fsvg%3E" vertex="1" parent="182">
+      <mxGeometry x="107.0" y="8" width="26" height="26" as="geometry"/>
+    </mxCell>
+    <mxCell id="t_183" value="Scorers determinísticos (idioma · longitud · PII) + consistencia (N corridas)&#10;Juez LLM reutiliza src/audit_criteria.py" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=0;strokeColor=none;fillColor=none;fontFamily=Inter,Helvetica,Arial;fontSize=9;fontColor=#006064;fontStyle=2;" vertex="1" parent="c_181">
+      <mxGeometry x="270" y="200" width="280" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="184" value="MLflow&#10;(un run por modelo&#10;+ scorecard ponderado)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F0FA;strokeColor=#7B1FA2;strokeWidth=1.5;fontFamily=Inter,Helvetica,Arial;fontSize=11;fontColor=#212121;shadow=0;verticalAlign=bottom;spacingBottom=6;spacingTop=0;spacingLeft=4;spacingRight=4;" vertex="1" parent="1">
+      <mxGeometry x="1170" y="960" width="240" height="120" as="geometry"/>
+    </mxCell>
+    <mxCell id="i_184" value="" style="shape=image;aspect=fixed;image=data:image/svg+xml,%3Csvg%20width%3D%22150%22%20height%3D%22150%22%20viewBox%3D%220%200%20150%20150%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Cpath%20d%3D%22M18.26%20102.29H67.72V99.29H21.26V22H128.74V99.29H73.5V114.51H51.5C49.4242%20114.513%2047.4341%20115.338%2045.9663%20116.806C44.4985%20118.274%2043.6727%20120.264%2043.67%20122.34V131H106.31V122.37C106.307%20120.294%20105.482%20118.304%20104.014%20116.836C102.546%20115.368%20100.556%20114.543%2098.48%20114.54H82.28V117.54H98.49C99.7702%20117.543%20100.997%20118.052%20101.902%20118.958C102.808%20119.863%20103.317%20121.09%20103.32%20122.37V128H46.68V122.37C46.6827%20121.09%2047.1924%20119.863%2048.0976%20118.958C49.0028%20118.052%2050.2298%20117.543%2051.51%20117.54H76.51V102.29H131.75V19H18.26V102.29Z%22%20fill%3D%22%23FF5F46%22%2F%3E%0A%3Cpath%20d%3D%22M30.37%2090.17H88.92V87.17H33.37V34.15H88.92V31.15H30.37V90.17Z%22%20fill%3D%22%23FF5F46%22%2F%3E%0A%3Cpath%20d%3D%22M95.13%2031.14V90.14H119.63V31.14H95.13ZM116.63%2087.14H98.13V34.14H116.63V87.14Z%22%20fill%3D%22%23FF5F46%22%2F%3E%0A%3Cpath%20d%3D%22M71.6601%2063.48L60.03%2053.54L48.76%2074.07L40.7201%2065.65L38.55%2067.72L49.42%2079.1L60.89%2058.22L72.32%2067.99L89.35%2041.59L86.8301%2039.96L71.6601%2063.48Z%22%20fill%3D%22%23FF5F46%22%2F%3E%3C%2Fsvg%3E" vertex="1" parent="184">
+      <mxGeometry x="107.0" y="8" width="26" height="26" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_180" value="casos de prueba" style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;orthogonalLoop=1;strokeColor=#00838F;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#00838F;strokeWidth=1.5;endArrow=classic;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="180" target="182">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_181" value="candidatos + juez" style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;orthogonalLoop=1;strokeColor=#EF6C00;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#EF6C00;strokeWidth=2;endArrow=classic;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="118" target="182">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_182" value="criterios (juez)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;orthogonalLoop=1;strokeColor=#00838F;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#00838F;strokeWidth=1.5;endArrow=classic;endFill=1;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=8 4;" edge="1" parent="1" source="114" target="182">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_183" value="registra runs&#10;+ scorecard" style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;orthogonalLoop=1;strokeColor=#00838F;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#00838F;strokeWidth=2.5;endArrow=classic;endFill=1;labelBackgroundColor=#FFFFFF;fontStyle=1;" edge="1" parent="1" source="182" target="184">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_185" value="Nota: comments_eval_pipeline es selección OFFLINE — no genera ni aplica comentarios al catálogo." style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=14;fillColor=#E0F7FA;strokeColor=#00838F;shadow=0;fontFamily=Inter,Helvetica,Arial;fontSize=10;fontColor=#455A64;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;spacingRight=4;" vertex="1" parent="1">
+      <mxGeometry x="1440" y="960" width="290" height="120" as="geometry"/>
     </mxCell>
   </root>
 </mxGraphModel>

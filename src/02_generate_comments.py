@@ -852,8 +852,14 @@ def generate_column_comment(
 # MAGIC
 # MAGIC Lee la tabla configurada en `scope_table` y agrupa las filas en una
 # MAGIC estructura `catalogo → esquema → tablas`. Luego enriquece cada
-# MAGIC esquema/tabla con su `comment` y la lista de columnas leídas desde
-# MAGIC `information_schema` del catálogo correspondiente.
+# MAGIC esquema/tabla con su `comment` y la lista de columnas usando comandos
+# MAGIC `DESCRIBE` sobre cada objeto.
+# MAGIC
+# MAGIC > **Permisos:** se usa `DESCRIBE SCHEMA EXTENDED` / `DESCRIBE TABLE
+# MAGIC > EXTENDED` en lugar de `information_schema`. Estos comandos solo
+# MAGIC > requieren privilegio sobre el objeto descrito (`USE CATALOG` +
+# MAGIC > `USE SCHEMA` + `SELECT`), no acceso a `information_schema` ni a
+# MAGIC > `system.*`.
 
 # COMMAND ----------
 
@@ -908,19 +914,20 @@ def load_scope_targets(
 
 
 def get_schema_comment(catalog: str, schema: str) -> str:
-    """Lee el comentario actual del esquema desde information_schema."""
+    """Lee el comentario actual del esquema vía DESCRIBE SCHEMA EXTENDED.
+
+    No consulta information_schema: solo requiere privilegio sobre el esquema.
+    """
     try:
         rows = spark.sql(
-            f"""
-            SELECT comment
-            FROM `{catalog}`.information_schema.schemata
-            WHERE catalog_name = '{catalog}'
-              AND schema_name  = '{schema}'
-            """
+            f"DESCRIBE SCHEMA EXTENDED `{catalog}`.`{schema}`"
         ).collect()
-        if not rows:
-            return ""
-        return rows[0]["comment"] or ""
+        # Devuelve pares (database_description_item, value); el comentario
+        # está en la fila cuyo item es 'Comment'.
+        for row in rows:
+            if (row[0] or "").strip() == "Comment":
+                return (row[1] or "").strip()
+        return ""
     except Exception as exc:
         logger.warning(
             f"  ⚠ No se pudo leer comentario del esquema "
@@ -932,50 +939,52 @@ def get_schema_comment(catalog: str, schema: str) -> str:
 def discover_columns_for_tables(
     catalog: str, schema: str, table_names: list
 ) -> dict:
-    """Descubre las columnas de un subconjunto de tablas de un esquema."""
+    """Descubre columnas y comentario de un subconjunto de tablas.
+
+    Usa DESCRIBE TABLE EXTENDED por tabla en lugar de information_schema:
+    solo requiere privilegio sobre cada objeto descrito. El orden natural
+    devuelto por DESCRIBE preserva el orden de las columnas.
+    """
     if not table_names:
         return {}
 
-    in_list = ", ".join(f"'{_esc(t)}'" for t in table_names)
-    rows = spark.sql(
-        f"""
-        SELECT
-            c.table_name,
-            c.column_name,
-            c.data_type,
-            c.ordinal_position,
-            t.comment AS table_comment
-        FROM `{catalog}`.information_schema.columns c
-        LEFT JOIN `{catalog}`.information_schema.tables t
-            ON  c.table_catalog = t.table_catalog
-            AND c.table_schema  = t.table_schema
-            AND c.table_name    = t.table_name
-        WHERE c.table_catalog = '{catalog}'
-          AND c.table_schema  = '{schema}'
-          AND c.table_name IN ({in_list})
-        ORDER BY c.table_name, c.ordinal_position
-        """
-    ).collect()
-
     tables: dict = {}
-    for row in rows:
-        t = row["table_name"]
-        if t not in tables:
-            tables[t] = {
-                "comment": row["table_comment"] or "",
-                "columns": [],
-            }
-        tables[t]["columns"].append(
-            {"name": row["column_name"], "type": row["data_type"]}
-        )
+    for tbl in table_names:
+        fqn = _qualify(f"{catalog}.{schema}.{tbl}")
+        try:
+            rows = spark.sql(f"DESCRIBE TABLE EXTENDED {fqn}").collect()
+        except Exception as exc:
+            logger.warning(
+                f"    ⚠ Tabla no accesible: `{catalog}`.`{schema}`.`{tbl}` — "
+                f"se omitirá ({str(exc)[:120]})"
+            )
+            continue
 
-    found = set(tables.keys())
-    missing = [t for t in table_names if t not in found]
-    for t in missing:
-        logger.warning(
-            f"    ⚠ Tabla no accesible: `{catalog}`.`{schema}`.`{t}` — "
-            "se omitirá"
-        )
+        columns: list = []
+        table_comment = ""
+        in_columns = True
+        for row in rows:
+            col_name = (row["col_name"] or "").strip()
+            data_type = (row["data_type"] or "").strip()
+            if in_columns:
+                # El bloque de columnas termina en la primera fila vacía o
+                # de sección ('# Partition Information', '# Detailed...').
+                if not col_name or col_name.startswith("#"):
+                    in_columns = False
+                    continue
+                columns.append({"name": col_name, "type": data_type})
+            elif col_name == "Comment":
+                # En la sección de detalle, el valor va en la 2a columna.
+                table_comment = data_type
+
+        if not columns:
+            logger.warning(
+                f"    ⚠ Sin columnas legibles para "
+                f"`{catalog}`.`{schema}`.`{tbl}` — se omitirá"
+            )
+            continue
+
+        tables[tbl] = {"comment": table_comment, "columns": columns}
 
     total_cols = sum(len(t["columns"]) for t in tables.values())
     logger.info(

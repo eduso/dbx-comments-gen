@@ -10,6 +10,8 @@
 # MAGIC - `ejecuciones`: registro de cada corrida del proceso.
 # MAGIC - `resultados`: comentarios generados con campos de revisión
 # MAGIC   (`status`, `user_comments`).
+# MAGIC - `golden_set_comentarios`: set de prueba curado para el bake-off de
+# MAGIC   modelos (`05_eval_models.py`). Se crea vacío; lo cura un experto.
 
 # COMMAND ----------
 
@@ -110,6 +112,42 @@ spark.sql(
 )
 
 print(f"Tabla `{results_catalog}`.`{results_schema}`.`resultados` OK")
+
+# COMMAND ----------
+
+spark.sql(
+    f"""
+    CREATE TABLE IF NOT EXISTS
+        `{results_catalog}`.`{results_schema}`.`golden_set_comentarios` (
+        object_id    STRING        NOT NULL
+            COMMENT 'Identificador único del objeto '
+                    '(ej. catalogo.esquema.tabla.columna)',
+        object_level VARCHAR(20)   NOT NULL
+            COMMENT 'Nivel del objeto: schema | table | column',
+        context_text STRING
+            COMMENT 'Contexto provisto al generador (insumos + metadata). '
+                    'Recomendado máx ~30K caracteres',
+        gold_comment STRING
+            COMMENT 'Comentario de referencia aprobado por experto '
+                    '(NULL si aún no existe; el juez evalúa contra contexto)',
+        domain       VARCHAR(255)
+            COMMENT 'Dominio de negocio (riesgos, finanzas, clientes, ...) '
+                    'para estratificar el set',
+        is_sensitive BOOLEAN
+            COMMENT 'Marca si el objeto involucra datos sensibles (PII)',
+        CONSTRAINT pk_golden_set PRIMARY KEY (object_id),
+        CONSTRAINT chk_object_level CHECK (
+            object_level IN ('schema', 'table', 'column')
+        )
+    )
+    COMMENT 'Set de prueba curado para el bake-off de modelos fundacionales'
+    """
+)
+
+print(
+    f"Tabla `{results_catalog}`.`{results_schema}`."
+    "`golden_set_comentarios` OK"
+)
 
 # COMMAND ----------
 

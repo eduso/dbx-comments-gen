@@ -1,7 +1,9 @@
-# Databricks Asset Bundle (DAB) — dbx-comments-gen v5
+# Databricks Asset Bundle (DAB) — dbx-comments-gen v7
 #
-# Pipeline:
-#   setup_schema → generate_comments → apply_comments
+# Jobs:
+#   comments_pipeline       : setup_schema → generate_comments → apply_comments
+#   comments_audit_pipeline : audit_comments (veredicto sobre `resultados`)
+#   comments_eval_pipeline  : eval_models (bake-off offline de modelos)
 #
 # Uso:
 #   databricks bundle validate --target dev --profile <profile>
@@ -54,6 +56,27 @@ variables:
   audit_only_approved:
     description: "Auditar solo filas con status='aprobado' (yes/no)"
     default: "yes"
+  candidate_models:
+    description: "Modelos candidatos a comparar en el bake-off (separados por coma)"
+    default: ""
+  judge_model:
+    description: "Modelo juez del bake-off (neutral, no debe ser candidato)"
+    default: "databricks-claude-opus-4-1"
+  golden_table:
+    description: "Tabla del golden set (vacío = <results>.golden_set_comentarios)"
+    default: ""
+  experiment_path:
+    description: "Ruta del experimento MLflow para el bake-off"
+    default: "/Shared/eval-comentarios-fundacionales"
+  eval_gen_temperature:
+    description: "Temperatura de generación durante el bake-off"
+    default: "0.0"
+  eval_n_consistency_runs:
+    description: "Corridas por input para medir consistencia"
+    default: "3"
+  eval_max_comment_chars:
+    description: "Máximo de caracteres por comentario en el bake-off"
+    default: "500"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workspace
@@ -191,6 +214,57 @@ resources:
               id_ejecucion:         "{{job.parameters.id_ejecucion}}"
               audit_only_approved:  "{{job.parameters.audit_only_approved}}"
               audit_model_endpoint: "{{job.parameters.audit_model_endpoint}}"
+            source: WORKSPACE
+          new_cluster: *single_node_cluster
+
+      tags:
+        project: "dbx-comments-gen"
+        team: "field-engineering"
+
+    comments_eval_pipeline:
+      name: "[${bundle.target}] Bake-off de Modelos Fundacionales"
+      description: >
+        Compara modelos fundacionales candidatos sobre la tarea del generador
+        de comentarios usando un golden set fijo, scorers determinísticos y un
+        juez LLM neutral (criterios de `src/audit_criteria.py`). Registra cada
+        candidato como un run de MLflow y produce un scorecard ponderado.
+        Proceso de selección offline: no genera ni aplica comentarios.
+
+      parameters:
+        - name: candidate_models
+          default: ${var.candidate_models}
+        - name: judge_model
+          default: ${var.judge_model}
+        - name: results_catalog
+          default: ${var.results_catalog}
+        - name: results_schema
+          default: ${var.results_schema}
+        - name: golden_table
+          default: ${var.golden_table}
+        - name: experiment_path
+          default: ${var.experiment_path}
+        - name: gen_temperature
+          default: ${var.eval_gen_temperature}
+        - name: n_consistency_runs
+          default: ${var.eval_n_consistency_runs}
+        - name: max_comment_chars
+          default: ${var.eval_max_comment_chars}
+
+      tasks:
+        - task_key: eval_models
+          description: "Ejecuta el bake-off y produce el scorecard"
+          notebook_task:
+            notebook_path: src/05_eval_models.py
+            base_parameters:
+              candidate_models:   "{{job.parameters.candidate_models}}"
+              judge_model:        "{{job.parameters.judge_model}}"
+              results_catalog:    "{{job.parameters.results_catalog}}"
+              results_schema:     "{{job.parameters.results_schema}}"
+              golden_table:       "{{job.parameters.golden_table}}"
+              experiment_path:    "{{job.parameters.experiment_path}}"
+              gen_temperature:    "{{job.parameters.gen_temperature}}"
+              n_consistency_runs: "{{job.parameters.n_consistency_runs}}"
+              max_comment_chars:  "{{job.parameters.max_comment_chars}}"
             source: WORKSPACE
           new_cluster: *single_node_cluster
 
