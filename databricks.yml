@@ -140,6 +140,10 @@ resources:
             spark_version: "15.4.x-scala2.12"
             num_workers: 0
             node_type_id: "Standard_DS3_v2"
+            # SINGLE_USER habilita Unity Catalog en el cluster (namespaces
+            # de 3 partes catalogo.esquema.tabla). Sin esto, el cluster usa
+            # el metastore legacy y falla al escribir en UC.
+            data_security_mode: "SINGLE_USER"
             spark_conf:
               spark.master: "local[*, 4]"
               spark.databricks.cluster.profile: "singleNode"

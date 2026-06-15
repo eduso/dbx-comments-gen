@@ -50,8 +50,7 @@ spark.sql(
         fecha_ejecucion TIMESTAMP
             COMMENT 'Fecha y hora de inicio de la ejecución',
         estado          VARCHAR(50)
-            COMMENT 'INICIADO, EN_PROCESO, COMPLETADO, '
-                    'COMPLETADO_CON_ERRORES, ERROR',
+            COMMENT 'INICIADO, EN_PROCESO, COMPLETADO, COMPLETADO_CON_ERRORES, ERROR',
         resultado       VARCHAR(4000)
             COMMENT 'Detalle del resultado final de la ejecución',
         CONSTRAINT pk_ejecuciones PRIMARY KEY (id_ejecucion)
@@ -98,16 +97,29 @@ spark.sql(
             REFERENCES
                 `{results_catalog}`.`{results_schema}`.`ejecuciones` (
                     id_ejecucion
-                ),
-        CONSTRAINT chk_status CHECK (
-            status IN ('por revisar', 'aprobado', 'rechazado')
-        )
+                )
     )
     COMMENT 'Comentarios generados por IA con flujo de revisión'
     TBLPROPERTIES (
         'delta.enableChangeDataFeed' = 'true',
         'delta.feature.allowColumnDefaults' = 'supported'
     )
+    """
+)
+
+# Los CHECK constraints en Unity Catalog se agregan vía ALTER TABLE
+# (no se permiten inline en CREATE TABLE). DROP IF EXISTS lo hace idempotente.
+spark.sql(
+    f"""
+    ALTER TABLE `{results_catalog}`.`{results_schema}`.`resultados`
+    DROP CONSTRAINT IF EXISTS chk_status
+    """
+)
+spark.sql(
+    f"""
+    ALTER TABLE `{results_catalog}`.`{results_schema}`.`resultados`
+    ADD CONSTRAINT chk_status
+    CHECK (status IN ('por revisar', 'aprobado', 'rechazado'))
     """
 )
 
@@ -120,27 +132,35 @@ spark.sql(
     CREATE TABLE IF NOT EXISTS
         `{results_catalog}`.`{results_schema}`.`golden_set_comentarios` (
         object_id    STRING        NOT NULL
-            COMMENT 'Identificador único del objeto '
-                    '(ej. catalogo.esquema.tabla.columna)',
+            COMMENT 'Identificador único del objeto (ej. catalogo.esquema.tabla.columna)',
         object_level VARCHAR(20)   NOT NULL
             COMMENT 'Nivel del objeto: schema | table | column',
         context_text STRING
-            COMMENT 'Contexto provisto al generador (insumos + metadata). '
-                    'Recomendado máx ~30K caracteres',
+            COMMENT 'Contexto provisto al generador (insumos + metadata). Recomendado máx ~30K caracteres',
         gold_comment STRING
-            COMMENT 'Comentario de referencia aprobado por experto '
-                    '(NULL si aún no existe; el juez evalúa contra contexto)',
+            COMMENT 'Comentario de referencia aprobado por experto (NULL si aún no existe; el juez evalúa contra contexto)',
         domain       VARCHAR(255)
-            COMMENT 'Dominio de negocio (riesgos, finanzas, clientes, ...) '
-                    'para estratificar el set',
+            COMMENT 'Dominio de negocio (riesgos, finanzas, clientes, ...) para estratificar el set',
         is_sensitive BOOLEAN
             COMMENT 'Marca si el objeto involucra datos sensibles (PII)',
-        CONSTRAINT pk_golden_set PRIMARY KEY (object_id),
-        CONSTRAINT chk_object_level CHECK (
-            object_level IN ('schema', 'table', 'column')
-        )
+        CONSTRAINT pk_golden_set PRIMARY KEY (object_id)
     )
     COMMENT 'Set de prueba curado para el bake-off de modelos fundacionales'
+    """
+)
+
+# CHECK vía ALTER TABLE (Unity Catalog no admite CHECK inline en CREATE).
+spark.sql(
+    f"""
+    ALTER TABLE `{results_catalog}`.`{results_schema}`.`golden_set_comentarios`
+    DROP CONSTRAINT IF EXISTS chk_object_level
+    """
+)
+spark.sql(
+    f"""
+    ALTER TABLE `{results_catalog}`.`{results_schema}`.`golden_set_comentarios`
+    ADD CONSTRAINT chk_object_level
+    CHECK (object_level IN ('schema', 'table', 'column'))
     """
 )
 
